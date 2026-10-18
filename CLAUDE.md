@@ -3,7 +3,9 @@
 **Project:** Single-Tenant AI Voice Agent, Realtime CRM Pipeline & Calendar Booking Engine
 **Architecture:** Monorepo — Python Voice Orchestrator (`FastAPI` + `Pipecat` + **Amazon Nova 2.5 Sonic**) + Realtime Web Dashboard (`Next.js App Router` + **local Supabase** + `shadcn/ui`)
 
-> Revision 2 (2026-10-18). Changes from rev 1: Nova 2.5 Sonic speech-to-speech replaces Deepgram STT + text LLM + Cartesia/ElevenLabs TTS; Supabase runs locally via the Supabase CLI; Twilio is the only PSTN provider; post-call extraction uses Claude on Amazon Bedrock; the dashboard requires Supabase Auth.
+> Revision 3 (2026-10-18).
+> * **Rev 2 (changes from rev 1):** Nova 2.5 Sonic speech-to-speech replaces Deepgram STT + text LLM + Cartesia/ElevenLabs TTS; Supabase runs locally via the Supabase CLI; Twilio is the only PSTN provider; post-call extraction uses Claude on Amazon Bedrock; the dashboard requires Supabase Auth.
+> * **Rev 3:** AWS credentials come from the AWS CLI credential chain; a Flows-style conversation state machine runs inside the tools (§5.3); post-call custom fields are extracted as key/value pairs; the dashboard has design tokens, dark mode and full loading, empty and error states (§6).
 
 ---
 
@@ -32,7 +34,8 @@ A self-hosted, single-tenant AI voice agent + CRM that handles **outbound speed-
 * `anthropic[bedrock]` — `AsyncAnthropicBedrockMantle` for post-call extraction (model `anthropic.claude-opus-5-5`, overridable)
 * `apscheduler >=3.10.4` — retry/callback redials
 * `httpx` — Cal.com v2; `twilio` — REST dialer, call updates, signature validation
-* `pyjwt` — verifies Supabase access tokens on dashboard-called endpoints
+* `pyjwt[crypto]` — verifies Supabase access tokens (HS256 secret or the local JWKS) on dashboard-called endpoints
+* `boto3` — resolves AWS credentials through the standard chain (`services/aws.py`)
 * Tests: `pytest`, `pytest-asyncio`, `respx`
 
 ### Frontend (`/apps/web`)
@@ -41,6 +44,7 @@ A self-hosted, single-tenant AI voice agent + CRM that handles **outbound speed-
 * `@supabase/supabase-js` + `@supabase/ssr` (auth + Postgres Changes on `contacts`, `call_logs`, `appointments`)
 * `@hello-pangea/dnd` (Kanban)
 * `@pipecat-ai/client-js` + `@pipecat-ai/small-webrtc-transport` (browser simulator)
+* `next-themes` (system/light/dark), Geist + Geist Mono via `next/font`
 
 ### Infra
 * **Supabase CLI** (`supabase start`) runs Postgres (54322), API/Realtime (54321), Auth, and Studio (54323) locally in Docker.
@@ -53,6 +57,7 @@ A self-hosted, single-tenant AI voice agent + CRM that handles **outbound speed-
 ```text
 .
 ├── CLAUDE.md
+├── README.md                          # how to run it
 ├── .env.example
 ├── docker-compose.yml
 ├── supabase/
@@ -68,17 +73,19 @@ A self-hosted, single-tenant AI voice agent + CRM that handles **outbound speed-
 │   │   │   ├── main.py                # FastAPI app, lifespan (pool, scheduler), CORS
 │   │   │   ├── config.py              # pydantic-settings
 │   │   │   ├── db.py                  # asyncpg pool + all SQL
-│   │   │   ├── schemas.py             # API payloads + PostCallExtraction
+│   │   │   ├── schemas.py             # API payloads, PostCallExtraction (+ model-facing Output variant)
 │   │   │   ├── routers/
 │   │   │   │   ├── calls.py           # Twilio webhooks, /ws/voice, /api/webrtc/offer
 │   │   │   │   └── leads.py           # POST /api/leads
 │   │   │   ├── pipeline/
 │   │   │   │   ├── voice_pipeline.py  # Nova Sonic pipeline builder (shared)
-│   │   │   │   ├── prompts.py         # system-instruction compiler
-│   │   │   │   ├── tools.py           # check_calendar_availability, book_calendar_appointment, transfer_to_human
-│   │   │   │   └── post_call.py       # extraction + stage state machine
+│   │   │   │   ├── prompts.py         # system-instruction compiler (stage overview, dates, UTC offset)
+│   │   │   │   ├── flow.py            # conversation state machine: stages, tool guards, next-step text
+│   │   │   │   ├── tools.py           # the 6 in-call tools, each wrapped by the flow guard
+│   │   │   │   └── post_call.py       # extraction, flow ground truth, pipeline-stage routing
 │   │   │   └── services/
 │   │   │       ├── auth.py            # Supabase JWT / webhook-secret guard
+│   │   │       ├── aws.py             # AWS credential chain (CLI profile, SSO, role, or .env keys)
 │   │   │       ├── llm.py             # Bedrock Claude structured extraction
 │   │   │       ├── telephony.py       # Twilio dialer, TwiML, bridge, signature check
 │   │   │       ├── calendar.py        # Cal.com v2 client
@@ -86,20 +93,26 @@ A self-hosted, single-tenant AI voice agent + CRM that handles **outbound speed-
 │   │   └── tests/
 │   └── web/
 │       ├── package.json
-│       ├── middleware.ts              # session gate → /login
 │       └── src/
+│           ├── middleware.ts          # session gate → /login
 │           ├── app/
-│           │   ├── layout.tsx
-│           │   ├── page.tsx           # KPI bar + Kanban + simulator
+│           │   ├── globals.css        # design tokens (light + dark)
+│           │   ├── layout.tsx         # fonts, theme provider, toaster
+│           │   ├── page.tsx           # KPI strip + Kanban
 │           │   ├── login/page.tsx
 │           │   └── settings/page.tsx  # Agent & Prompt Studio
 │           ├── components/
-│           │   ├── kanban-board.tsx
-│           │   ├── contact-drawer.tsx
+│           │   ├── top-nav.tsx
+│           │   ├── kanban-board.tsx   # board, skeleton, live indicator
+│           │   ├── contact-drawer.tsx # calls, transcript, step path, details form
 │           │   ├── browser-call-sim.tsx
-│           │   └── ui/                # shadcn primitives
+│           │   ├── new-lead-dialog.tsx
+│           │   ├── theme-provider.tsx / theme-toggle.tsx
+│           │   └── ui/                # shadcn primitives (Radix), tokenized
+│           ├── hooks/use-crm.ts       # contacts + latest calls via Postgres Changes
 │           └── lib/
-│               ├── supabase.ts
+│               ├── supabase.ts        # browser client + voice-engine fetch
+│               ├── format.ts
 │               └── types.ts
 ```
 
@@ -142,6 +155,7 @@ transport.input() → user_aggregator → AWSNovaSonicLLMService(tools, voice, s
   * Inbound / WebRTC-inbound: on client connect, queue `LLMRunFrame` with a seed user message telling the agent to deliver the compiled `inbound_greeting`. Any upcoming confirmed appointment is noted in the system instruction ("Caller already has a confirmed booking on {scheduled_at}…").
   * Outbound: the agent waits for the callee to speak ("Hello?"). If no user turn starts within **1200 ms** of connect, queue the greeting run anyway.
 * RTVI is enabled so the browser simulator receives live transcripts and function-call events.
+* **Agent-initiated hangup.** `end_call` queues an `EndFrame` after a short delay so the goodbye plays. On Twilio, the serializer's auto hang-up ends the phone call; on WebRTC, the session closes. Post-call runs either way.
 
 ### 5.3 Conversation flow & in-call tools (`pipeline/flow.py`, `pipeline/tools.py`)
 Nova Sonic fixes its prompt and tools when the session opens, so Pipecat Flows' per-node prompt swaps do not apply. Instead, a Flows-style state machine runs inside the tools:
@@ -159,7 +173,8 @@ Nova Sonic fixes its prompt and tools when the session opens, so Pipecat Flows' 
 
 ### 5.4 Post-call (`pipeline/post_call.py`)
 On transport disconnect:
-1. Transcript → `services/llm.extract()` → `PostCallExtraction` (Claude on Bedrock). An empty transcript → `voicemail` without calling the LLM.
+1. Transcript → `services/llm.extract()` → `PostCallExtraction` (Claude on Bedrock via `messages.parse`). An empty transcript → `voicemail` without calling the LLM.
+   The model-facing schema (`PostCallExtractionOutput`) returns custom fields as `[{key, value}]` pairs and converts them to a dict, because structured outputs steer an open-ended object to `{}`.
    What the in-call flow recorded is ground truth and overrides the classifier:
    * booked or transferred keeps that outcome;
    * a scheduled callback → `follow_up_requested` at that exact time;
@@ -180,17 +195,34 @@ APScheduler interval job (60 s). Selects contacts in `no_answer_retry`/`follow_u
 
 ## 6. Frontend UI/UX
 
-Clean, high-contrast shadcn/ui: 56px top nav, 8px grid, zinc palette plus one accent (`emerald-600` for active calls and booked), weights 400/600.
+Calm, Linear-like shadcn/ui on Radix: 56px top nav, 8px grid, Geist + Geist Mono (numbers, phones, IDs), two weights (400/600).
 
-* **Login (`/login`)**: email + password via Supabase Auth. `middleware.ts` redirects unauthenticated users here.
-* **Main (`/`)**
-  * KPI bar: Total Leads, Active Calls Now (pulsing), Appointments Booked, Conversion %. Actions: "+ New Lead / Dial" and "Test Agent in Browser ($0 WebRTC)".
-  * 7-column Kanban mapped 1:1 to `pipeline_stage`. Realtime via `supabase.channel('crm-pipeline')`. Drag-and-drop updates `stage`. Cards show name or formatted phone, deal value, latest sentiment badge, tags, and relative `last_contacted_at`. Stage changes animate.
-  * Contact drawer (Sheet, 480px):
-    * `Activity & Calls` tab: audio player, summary, outcome badge, collapsible timestamped transcript.
-    * `Contact Details` tab: editable name, email, phone, stage, and a custom_fields key-value editor.
-  * Browser call simulator: Inbound/Outbound toggle, connect/disconnect, live transcript, tool-call log (RTVI events).
-* **Settings (`/settings`)**: form bound to `agent_config` (id=1). Fields: agent name, company, Nova Sonic voice selector, both greeting templates, qualification-question list builder, objection-handler key-value list, Cal.com event type ID, transfer phone, timezone, and business hours.
+**Design tokens (`globals.css`), light and dark:**
+* Zinc neutrals plus ONE accent, `brand` (emerald). It is used only for live calls, booked states and call actions.
+* Light-mode fills use emerald-700 so white text passes WCAG AA (emerald-600 is about 3.8:1). Dark mode uses emerald-500 with dark text.
+* Semantic `danger` tokens cover errors and negative sentiment. Components never hardcode palette classes, and nothing uses pure black or pure white.
+* Radius rule: controls, cards and columns use 8px; status pills and chips are fully rounded.
+* Theme: `next-themes` follows the system by default, with a system/light/dark toggle in the nav and on the login page.
+* Animations are gated by `motion-safe:`.
+
+**Screens:**
+* **Login (`/login`)**: email + password via Supabase Auth, with an inline error. `src/middleware.ts` redirects unauthenticated users here.
+* **Pipeline (`/`)**
+  * **KPI strip:** Total leads, Active calls (live indicator only while a call is active), Appointments booked, Conversion. It becomes a 2×2 grid on phones.
+  * **Nav actions:** "+ New Lead / Dial" and "Test Agent in Browser ($0 WebRTC)". Below `md` they show icon only, with aria-labels.
+  * **Kanban:** 7 columns mapped 1:1 to `pipeline_stage`, kept realtime via `supabase.channel('crm-pipeline')`.
+    * Drag-and-drop updates `stage`. Cards open with Enter or a click.
+    * Each card shows the name or formatted phone, deal value, latest sentiment badge, tags and relative `last_contacted_at`. Booked cards get an accent rail, and cards moved by realtime get a brief highlight.
+    * There is a skeleton loader and a per-column empty hint. Columns snap-scroll at 85% width on phones.
+  * **Contact drawer** (Sheet, 480px):
+    * `Activity & Calls` tab: outcome, direction and sentiment badges, a summary, the conversation step path (from `extracted_data.flow`), an audio player and a collapsible timestamped transcript. Shows an empty state when there are no calls.
+    * `Contact Details` tab: editable name, email, phone, stage and a custom_fields key/value editor.
+  * **Browser call simulator:**
+    * Inbound / speed-to-lead toggle, with a lead picker for speed-to-lead.
+    * Plain-language status (Not connected, Connecting…, Live with a timer, Call ended).
+    * A blocked-microphone alert driven by Pipecat `onDeviceError`.
+    * A live transcript and a tool-call log (RTVI events), with empty states.
+* **Agent Studio (`/settings`):** a form bound to `agent_config` (id=1). Fields: agent name, company, Nova Sonic voice, both greeting templates, qualification questions (each becomes a `save_qualification` field), objection handlers, Cal.com event type ID, transfer phone, timezone and redial hours. It has a skeleton loader and a sticky save bar showing "Unsaved changes" or "All changes saved".
 
 ---
 
@@ -204,6 +236,7 @@ See `.env.example`, which is the contract. Keys: Supabase URLs and keys, `DATABA
 2. **Nova Sonic pipeline & Cal.com tools (WebRTC first).** Gate: unit tests for prompts, stage routing, and booking transaction/rollback (Cal.com mocked); a manual browser call books a slot and moves the card to `appointment_booked`.
 3. **Twilio adapters & retry worker.** Gate: TwiML/route tests, inbound latency check, retry-selection test; live PSTN via ngrok when creds exist.
 4. **Next.js dashboard.** Gate: `npm run build` + typecheck; sign in, then see realtime card moves and a simulator call end-to-end.
+5. **Conversation flow.** Gate: `tests/test_flow.py` covers guards, transitions, `next` text, callbacks, hangup and post-call overrides. A live scripted call (Polly-voiced caller → Nova Sonic, Cal.com stubbed) goes qualify → schedule → booked → closed and leaves the contact in `appointment_booked`.
 
 ## 9. Dev commands
 ```bash

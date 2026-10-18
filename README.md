@@ -30,7 +30,7 @@ The full system design lives in [CLAUDE.md](CLAUDE.md).
 In **us-east-1**, your account needs Bedrock access to:
 
 - `amazon.nova-2-5-sonic` (the realtime voice)
-- `anthropic.claude-opus-5-5` (post-call summaries and stage routing)
+- `anthropic.claude-opus-5-5` (post-call summaries and outcome classification)
 
 Check access with:
 
@@ -122,16 +122,12 @@ second line of [supabase/seed.sql](supabase/seed.sql). They only exist in your l
 
 1. **Talk to the agent in your browser.** Click **Test Agent in Browser ($0 WebRTC)** and allow
    microphone access. Use regular Chrome or Safari; embedded preview browsers often block the mic.
-   - **Simulate inbound call:** the agent answers like a receptionist.
-   - **Simulate speed-to-lead call:** pick a lead. The agent waits for your "Hello?" and then gives
-     its opener.
+   - **Inbound call:** the agent answers like a receptionist.
+   - **Speed-to-lead call:** pick a lead. The agent waits for your "Hello?" and then gives its
+     opener.
 
-   The dialog shows the live transcript and every tool call (qualification, calendar lookups, bookings,
-   callbacks, transfers, hang-up).
-
-   The agent follows fixed steps: qualify, then schedule, then wrap up. Tools called out of order are
-   rejected, and each tool result tells the agent its next step. The steps each call went through appear
-   in the contact drawer.
+   The dialog shows the call status and timer, the live transcript and every tool call. If the
+   browser blocks your microphone, a warning appears instead of a silent call.
 2. **Watch the board update.** When the agent books a slot, the card moves to
    **Appointment Booked** without a page refresh. When you hang up, post-call analysis writes the
    summary, sentiment and transcript. Click any card to see them.
@@ -140,6 +136,32 @@ second line of [supabase/seed.sql](supabase/seed.sql). They only exist in your l
 4. **Tune the agent.** Open **Agent Studio** (`/settings`) to edit the greetings, Nova Sonic voice,
    qualification questions, objection handlers, Cal.com event type ID, transfer number and
    redial hours. New calls use the changes immediately.
+
+The dashboard follows your system's light or dark mode. Use the monitor, sun or moon button in the top
+bar to switch.
+
+### How a call is structured
+
+The agent follows fixed steps. The code tracks which step the call is in, rejects tools used out
+of order, and tells the agent its next step in every tool result:
+
+| Step | What the agent does | Tools it can use |
+|---|---|---|
+| Qualify | Asks your Agent Studio questions, one at a time | `save_qualification`, `check_calendar_availability` |
+| Schedule | Asks which day suits the caller, offers up to 3 times, confirms name and email | `check_calendar_availability`, `book_calendar_appointment` |
+| Booked | Confirms the time, says goodbye, hangs up | `end_call` |
+| Callback | Confirms the agreed callback time, hangs up | `end_call`, or `check_calendar_availability` if they change their mind |
+
+During qualify and schedule the agent can also use `schedule_callback`. At any live step it can use
+`transfer_to_human`, or `end_call` (for example "not interested" or "wrong number").
+
+Each qualification question in Agent Studio becomes a field of `save_qualification`. The answers
+are saved to the contact's custom fields. Bookings only go through for a time the agent actually
+offered and a complete email address.
+
+After the call, what the steps recorded (booking, callback time, decline) decides the card's stage;
+Claude's transcript analysis only adds the summary, sentiment and extra details. The contact drawer
+shows the steps each call went through, for example Qualify › Schedule › Booked › Ended.
 
 ### Send leads from an external form
 
@@ -210,4 +232,6 @@ docker compose up --build
 | `No AWS credentials found` | Run `aws configure` (or `aws sso login`), or set `AWS_PROFILE` in `.env`. |
 | Dashboard loads but the board is empty or the login fails | Run `supabase status` and check that `apps/web/.env.local` has the current anon key. |
 | Calendar tool says it's unavailable | Set `CAL_API_KEY` in `.env` and a real Cal.com event type ID in Agent Studio. |
+| "Microphone blocked" in the simulator | Allow microphone access for `localhost:3000` in your browser settings, or open the dashboard in regular Chrome or Safari. |
+| Agent keeps asking for the email | The booking tool rejects incomplete addresses (for example a missing "at"). Spell it out clearly, including the part after the at sign. |
 | Reset all local data | `supabase db reset` re-applies the migration and seed. |

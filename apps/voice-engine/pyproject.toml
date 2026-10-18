@@ -16,6 +16,7 @@ dependencies = [
     "twilio>=9.3.0",
     "pyjwt[crypto]>=2.9.0",
     "python-multipart>=0.0.12",
+    "boto3>=1.35",
 ]
 
 [dependency-groups]
