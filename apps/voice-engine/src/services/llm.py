@@ -7,7 +7,7 @@ from typing import Any
 from anthropic import AsyncAnthropicBedrockMantle
 
 from src.config import get_settings
-from src.schemas import PostCallExtraction
+from src.schemas import PostCallExtraction, PostCallExtractionOutput
 
 SYSTEM = """You analyse transcripts of sales/receptionist phone calls made by an AI agent.
 Classify the call outcome:
@@ -19,7 +19,7 @@ Classify the call outcome:
 Write a concise 2-sentence summary of the caller's needs and objections.
 If a specific callback time was requested, give it as an ISO 8601 timestamp with UTC offset, resolved
 against the call time and timezone given. Put any useful facts (budget, goals, timeline, company,
-service interest) in extracted_custom_fields using short snake_case keys."""
+service interest) in extracted_custom_fields as key/value pairs with short snake_case keys."""
 
 
 @lru_cache
@@ -58,8 +58,8 @@ async def extract(
             "role": "user",
             "content": "\n".join(facts) + "\n\n<transcript>\n" + format_transcript(transcript) + "\n</transcript>",
         }],
-        output_format=PostCallExtraction,
+        output_format=PostCallExtractionOutput,
     )
     if response.parsed_output is None:
         raise RuntimeError(f"extraction returned no structured output (stop_reason={response.stop_reason})")
-    return response.parsed_output
+    return response.parsed_output.to_extraction()

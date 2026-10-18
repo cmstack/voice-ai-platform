@@ -37,7 +37,7 @@ class LeadOut(BaseModel):
     dialed: bool = False
 
 
-class PostCallExtraction(BaseModel):
+class _PostCallBase(BaseModel):
     outcome: Literal["booked", "voicemail", "follow_up_requested", "transferred", "not_interested"]
     sentiment: Literal["positive", "neutral", "negative"]
     summary: str = Field(description="Concise 2-sentence summary of caller needs and objections")
@@ -45,7 +45,27 @@ class PostCallExtraction(BaseModel):
         default=None,
         description="ISO 8601 timestamp with offset if the caller asked to be called back at a specific time",
     )
+
+
+class PostCallExtraction(_PostCallBase):
     extracted_custom_fields: dict[str, Any] = Field(default_factory=dict)
+
+
+class CustomField(BaseModel):
+    key: str = Field(description="Short snake_case name, e.g. budget, timeline, company")
+    value: str
+
+
+class PostCallExtractionOutput(_PostCallBase):
+    """Model-facing schema. Structured outputs steer an open-ended object to `{}`, so facts come back as pairs."""
+
+    extracted_custom_fields: list[CustomField] = Field(
+        default_factory=list, description="Useful facts the caller stated (budget, goals, timeline, company, service interest)"
+    )
+
+    def to_extraction(self) -> PostCallExtraction:
+        fields = {f.key.strip(): f.value.strip() for f in self.extracted_custom_fields if f.key.strip() and f.value.strip()}
+        return PostCallExtraction(**self.model_dump(exclude={"extracted_custom_fields"}), extracted_custom_fields=fields)
 
 
 class CallContext(BaseModel):

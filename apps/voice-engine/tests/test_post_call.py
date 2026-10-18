@@ -4,7 +4,7 @@ import pytest
 
 from src.pipeline import post_call
 from src.pipeline.post_call import decide_stage
-from src.schemas import PostCallExtraction
+from src.schemas import CustomField, PostCallExtraction, PostCallExtractionOutput
 
 NOW = datetime(2026, 10, 19, 15, 0, tzinfo=timezone.utc)
 
@@ -88,3 +88,16 @@ async def test_run_post_call_persists_and_routes(pool, monkeypatch):
     log = await pool.fetchrow("SELECT * FROM call_logs WHERE id = $1", log_id)
     assert (log["outcome"], log["sentiment"], log["duration_seconds"]) == ("follow_up_requested", "positive", 42)
     assert log["transcript"][1]["content"] == "Call me Tuesday"
+
+
+def test_model_output_pairs_become_custom_fields_dict():
+    out = PostCallExtractionOutput(
+        outcome="follow_up_requested", sentiment="neutral", summary="s", requested_callback_iso="2099-01-06T15:00:00+00:00",
+        extracted_custom_fields=[
+            CustomField(key="budget", value="$5k"), CustomField(key=" timeline ", value="next quarter "),
+            CustomField(key="", value="dropped"), CustomField(key="company", value=" "),
+        ],
+    ).to_extraction()
+    assert isinstance(out, PostCallExtraction)
+    assert out.extracted_custom_fields == {"budget": "$5k", "timeline": "next quarter"}
+    assert out.requested_callback_iso == "2099-01-06T15:00:00+00:00" and out.outcome == "follow_up_requested"
