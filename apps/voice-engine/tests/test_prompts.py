@@ -35,3 +35,10 @@ def test_inbound_instruction_mentions_existing_booking():
         upcoming_appointments=[appt], now=NOW)
     assert "Thanks for calling Apex Services, this is Alex." in text
     assert "already has a confirmed booking on Wednesday, October 21 at 3:00 PM" in text
+
+
+def test_upcoming_dates_resolve_weekdays():
+    text = prompts.compile_system_instruction(
+        config=CONFIG, contact={"phone": "+15550100000"}, direction="outbound", upcoming_appointments=[], now=NOW)
+    # NOW is Monday 2026-10-19, so "Tuesday" must map to the 20th
+    assert "Tuesday 2026-10-20" in text and "Monday 2026-10-26" in text and "UTC offset -05:00" in text

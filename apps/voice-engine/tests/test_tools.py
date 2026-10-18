@@ -24,6 +24,12 @@ async def rt():
                        config=config, contact=c)
 
 
+def offer(rt, slot_iso):
+    """Simulate check_calendar_availability having offered this slot on the call."""
+    rt.offered_slots[slot_iso] = datetime.fromisoformat(slot_iso)
+    rt.flow.enter(tools.Stage.SCHEDULE)
+
+
 def future_slots(n):
     base = (datetime.now(timezone.utc) + timedelta(days=2)).replace(hour=15, minute=0, second=0, microsecond=0)
     return [{"start": (base + timedelta(minutes=30 * i)).isoformat()} for i in range(n)]
@@ -46,6 +52,7 @@ async def test_availability_rejects_bad_date(rt):
 @respx.mock
 async def test_booking_success_is_atomic(rt, pool):
     slot = future_slots(1)[0]["start"]
+    offer(rt, slot)
     route = respx.post(f"{CAL}/bookings").mock(return_value=httpx.Response(201, json={"status": "success", "data": {"uid": "bk_123", "start": slot}}))
     out = await tools.book_calendar_appointment(rt, slot, "Jane Doe", "jane@example.com", "wants a demo")
     assert out["success"] is True and rt.booked
@@ -59,7 +66,9 @@ async def test_booking_success_is_atomic(rt, pool):
 @respx.mock
 async def test_booking_failure_writes_nothing(rt, pool):
     respx.post(f"{CAL}/bookings").mock(return_value=httpx.Response(400, json={"error": "slot taken"}))
-    out = await tools.book_calendar_appointment(rt, future_slots(1)[0]["start"], "Jane", "jane@example.com")
+    slot = future_slots(1)[0]["start"]
+    offer(rt, slot)
+    out = await tools.book_calendar_appointment(rt, slot, "Jane", "jane@example.com")
     assert out["success"] is False and not rt.booked
     assert await pool.fetchval("SELECT stage::text FROM contacts WHERE id = $1", rt.call.contact_id) == "calling_in_progress"
     assert await pool.fetchval("SELECT count(*) FROM appointments WHERE contact_id = $1", rt.call.contact_id) == 0
@@ -68,6 +77,7 @@ async def test_booking_failure_writes_nothing(rt, pool):
 @respx.mock
 async def test_db_failure_rolls_back_both_writes(rt, pool, monkeypatch):
     slot = future_slots(1)[0]["start"]
+    offer(rt, slot)
     respx.post(f"{CAL}/bookings").mock(return_value=httpx.Response(201, json={"data": {"uid": "bk_dup", "start": slot}}))
     await tools.book_calendar_appointment(rt, slot, "Jane", "jane@example.com")
     await db.set_stage(rt.call.contact_id, "calling_in_progress")
@@ -93,4 +103,5 @@ async def test_transfer_webrtc_simulated(rt, pool):
 
 def test_tool_schemas_registered(rt):
     names = [t.name for t in tools.build_tools(rt)]
-    assert names == ["check_calendar_availability", "book_calendar_appointment", "transfer_to_human"]
+    assert names == ["save_qualification", "check_calendar_availability", "book_calendar_appointment",
+                     "schedule_callback", "transfer_to_human", "end_call"]

@@ -143,15 +143,29 @@ transport.input() → user_aggregator → AWSNovaSonicLLMService(tools, voice, s
   * Outbound: the agent waits for the callee to speak ("Hello?"). If no user turn starts within **1200 ms** of connect, queue the greeting run anyway.
 * RTVI is enabled so the browser simulator receives live transcripts and function-call events.
 
-### 5.3 In-call tools (`pipeline/tools.py`)
-The system instruction requires a short filler phrase ("Let me check the calendar real quick…") **before** each tool call. Nova Sonic produces all speech, so there is no `tts.say()`.
-1. `check_calendar_availability(date_str, timezone="America/Chicago")`: `GET https://api.cal.com/v2/slots?eventTypeId=…&start=…&end=…&timeZone=…` with `cal-api-version: 2024-09-04`. Returns the top 3 human-readable slots plus their ISO values.
-2. `book_calendar_appointment(slot_iso, attendee_name, attendee_email, notes)`: `POST https://api.cal.com/v2/bookings` with `cal-api-version: 2024-08-13`. On 201, run one DB transaction: insert `appointments` and set `contacts.stage='appointment_booked'`, name, and email.
-3. `transfer_to_human(reason)`: reads `human_transfer_phone`. The model says "Hold on just a second while I connect you with a specialist." Then the call is updated via Twilio REST with TwiML `<Dial>` and `stage='transferred_to_human'` is set. In WebRTC mode it only updates the stage and tells the caller the transfer was simulated.
+### 5.3 Conversation flow & in-call tools (`pipeline/flow.py`, `pipeline/tools.py`)
+Nova Sonic fixes its prompt and tools when the session opens, so Pipecat Flows' per-node prompt swaps do not apply. Instead, a Flows-style state machine runs inside the tools:
+* **Stages:** `qualify → schedule → booked`, plus `callback`, `transferred` and `closed` exits. Each stage allows a fixed set of tools. An out-of-order call is rejected and told what to do now.
+* **Every tool result carries `stage` and `next`.** `next` holds the current node's instructions, which Nova reads mid-call. The system instruction includes the stage overview and tells the model to follow `next`.
+* **Tools (all registered once):**
+  * `save_qualification`: one string field per configured question (keys from `answer_key()`) plus `ready_to_book`.
+  * `check_calendar_availability`: Cal.com `GET /v2/slots`, `cal-api-version: 2024-09-04`, top 3 spread slots.
+  * `book_calendar_appointment`: only slots offered on this call, valid email required. Cal.com `POST /v2/bookings`, `cal-api-version: 2024-08-13`. On 201, one DB transaction: insert `appointments`, set the contact to `appointment_booked`.
+  * `schedule_callback`: a future ISO time with an offset.
+  * `transfer_to_human`: Twilio `<Dial>`; simulated in WebRTC calls.
+  * `end_call`: reason `completed|not_interested|wrong_number|voicemail`. Hangs up after the goodbye.
+* The model says a short filler only before the calendar tools.
+* The prompt lists the next 7 dates and the UTC offset so weekdays and callback times resolve correctly.
 
 ### 5.4 Post-call (`pipeline/post_call.py`)
 On transport disconnect:
-1. Transcript → `services/llm.extract()` → `PostCallExtraction` (Claude on Bedrock, `messages.parse(output_format=PostCallExtraction)`). An empty transcript → `voicemail` without calling the LLM.
+1. Transcript → `services/llm.extract()` → `PostCallExtraction` (Claude on Bedrock). An empty transcript → `voicemail` without calling the LLM.
+   What the in-call flow recorded is ground truth and overrides the classifier:
+   * booked or transferred keeps that outcome;
+   * a scheduled callback → `follow_up_requested` at that exact time;
+   * `end_call` not_interested or wrong_number → `not_interested`;
+   * saved qualification answers merge into `custom_fields`;
+   * the stage path is stored at `call_logs.extracted_data.flow`.
 2. Update `call_logs` with transcript, duration, outcome, sentiment, summary, and extracted_data. Merge `extracted_custom_fields` into `contacts.custom_fields`, and set `last_contacted_at`.
 3. Deterministic routing, skipped when the stage is already `appointment_booked` or `transferred_to_human`:
    * `voicemail`: if `retry_count < 3`, set `no_answer_retry`, increment `retry_count`, and set `next_follow_up_at = now + 4h`. Otherwise set `not_interested`.

@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { format } from "date-fns";
-import { ChevronDown, PhoneOff, Plus, Trash2 } from "lucide-react";
+import { ChevronDown, ChevronRight, PhoneOff, Plus, Trash2 } from "lucide-react";
 import { LiveDot } from "@/components/kanban-board";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
@@ -123,6 +123,7 @@ function CallList({ calls }: { calls: CallLog[] }) {
             </div>
           </div>
           {call.summary && <p className="mt-3 text-sm leading-relaxed text-foreground">{call.summary}</p>}
+          <FlowPath call={call} />
           {call.recording_url && (
             <audio controls preload="none" src={call.recording_url} className="mt-3 h-8 w-full" />
           )}
@@ -152,6 +153,32 @@ function CallList({ calls }: { calls: CallLog[] }) {
               </CollapsibleContent>
             </Collapsible>
           )}
+        </li>
+      ))}
+    </ol>
+  );
+}
+
+const STEP_LABELS: Record<string, string> = {
+  qualify: "Qualify",
+  schedule: "Schedule",
+  booked: "Booked",
+  callback: "Callback",
+  transferred: "Transferred",
+  closed: "Ended",
+};
+
+/** The conversation steps the agent went through on this call (from the in-call flow). */
+function FlowPath({ call }: { call: CallLog }) {
+  const flow = call.extracted_data?.flow as { path?: { stage: string }[] } | undefined;
+  const steps = flow?.path?.map((p) => p.stage) ?? [];
+  if (steps.length < 2) return null;
+  return (
+    <ol className="mt-3 flex flex-wrap items-center gap-1 text-xs text-muted-foreground" aria-label="Conversation steps">
+      {steps.map((step, i) => (
+        <li key={i} className="flex items-center gap-1">
+          {i > 0 && <ChevronRight className="size-3" strokeWidth={1.75} aria-hidden />}
+          <span className={cn(i === steps.length - 1 && "font-semibold text-foreground")}>{STEP_LABELS[step] ?? step}</span>
         </li>
       ))}
     </ol>

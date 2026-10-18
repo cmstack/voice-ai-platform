@@ -15,7 +15,7 @@ from datetime import datetime, timezone
 from loguru import logger
 from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.audio.vad.vad_analyzer import VADParams
-from pipecat.frames.frames import LLMRunFrame
+from pipecat.frames.frames import EndFrame, LLMRunFrame
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.runner import PipelineRunner
 from pipecat.pipeline.worker import PipelineParams, PipelineWorker
@@ -103,6 +103,12 @@ class VoiceSession:
         )
         self._wire_events(aggregators)
 
+        async def hangup():
+            logger.info(f"Call {self.call.call_log_id}: agent ended the call")
+            await self.worker.queue_frame(EndFrame())
+
+        self.rt.hangup = hangup
+
         try:
             await PipelineRunner(handle_sigint=False).run(self.worker)
         finally:
@@ -177,6 +183,7 @@ class VoiceSession:
                 booked=self.rt.booked,
                 transferred=self.rt.transferred,
                 tz=tz,
+                flow=self.rt.flow,
             )
         except Exception:
             logger.exception(f"Post-call processing failed for {self.call.call_log_id}")

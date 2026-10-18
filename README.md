@@ -126,7 +126,12 @@ second line of [supabase/seed.sql](supabase/seed.sql). They only exist in your l
    - **Simulate speed-to-lead call:** pick a lead. The agent waits for your "Hello?" and then gives
      its opener.
 
-   The dialog shows the live transcript and every tool call (calendar lookups, bookings, transfers).
+   The dialog shows the live transcript and every tool call (qualification, calendar lookups, bookings,
+   callbacks, transfers, hang-up).
+
+   The agent follows fixed steps: qualify, then schedule, then wrap up. Tools called out of order are
+   rejected, and each tool result tells the agent its next step. The steps each call went through appear
+   in the contact drawer.
 2. **Watch the board update.** When the agent books a slot, the card moves to
    **Appointment Booked** without a page refresh. When you hang up, post-call analysis writes the
    summary, sentiment and transcript. Click any card to see them.
