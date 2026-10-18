@@ -1,9 +1,9 @@
 # System Specification & Architecture Document (`CLAUDE.md`)
 
 **Project:** Single-Tenant AI Voice Agent, Realtime CRM Pipeline & Calendar Booking Engine
-**Architecture:** Monorepo — Python Voice Orchestrator (`FastAPI` + `Pipecat` + **Amazon Nova 2 Sonic**) + Realtime Web Dashboard (`Next.js App Router` + **local Supabase** + `shadcn/ui`)
+**Architecture:** Monorepo — Python Voice Orchestrator (`FastAPI` + `Pipecat` + **Amazon Nova 2.5 Sonic**) + Realtime Web Dashboard (`Next.js App Router` + **local Supabase** + `shadcn/ui`)
 
-> Revision 2 (2026-10-17). Changes from rev 1: Nova 2 Sonic speech-to-speech replaces Deepgram STT + text LLM + Cartesia/ElevenLabs TTS; Supabase runs locally via the Supabase CLI; Twilio is the only PSTN provider; post-call extraction uses Claude on Amazon Bedrock; the dashboard requires Supabase Auth.
+> Revision 2 (2026-10-18). Changes from rev 1: Nova 2.5 Sonic speech-to-speech replaces Deepgram STT + text LLM + Cartesia/ElevenLabs TTS; Supabase runs locally via the Supabase CLI; Twilio is the only PSTN provider; post-call extraction uses Claude on Amazon Bedrock; the dashboard requires Supabase Auth.
 
 ---
 
@@ -17,7 +17,7 @@ A self-hosted, single-tenant AI voice agent + CRM that handles **outbound speed-
    - `webrtc` mode: zero-cost browser mic/speaker testing via Pipecat `SmallWebRTCTransport` (SDP offer/answer over `POST /api/webrtc/offer`). The whole app works with **no phone number**.
    - `telephony` mode: **Twilio Media Streams only** — bidirectional 8 kHz μ-law over WebSocket (`/ws/voice`) via Pipecat `TwilioFrameSerializer`. Pipecat resamples to Nova Sonic's 16 kHz input / 24 kHz output.
 3. **Unified Voice Loop.** Inbound, outbound, and WebRTC calls share one pipeline builder (`pipeline/voice_pipeline.py`), differing only in initial context and who speaks first.
-4. **One realtime model.** Nova 2 Sonic (`amazon.nova-2-sonic-v1:0`) is the only realtime speech model. Do NOT add separate STT, text-LLM, or TTS services to the call path.
+4. **One realtime model.** Nova 2.5 Sonic (`amazon.nova-2-5-sonic`) is the only realtime speech model. Do NOT add separate STT, text-LLM, or TTS services to the call path.
 5. **Strict Tool & Post-Call Contracts.** Mid-call bookings write the DB inside one atomic transaction. Post-call summaries and stage transitions use structured Pydantic outputs; stage routing is deterministic code, never LLM-decided.
 
 ---
@@ -138,7 +138,7 @@ transport.input() → user_aggregator → AWSNovaSonicLLMService(tools, voice, s
 ```
 * `LLMContextAggregatorPair` (realtime mode auto-detected). Transcript lines are captured from `on_user_turn_message_added` / `on_assistant_turn_stopped` with timestamps.
 * Turn-taking and barge-in are native to Nova Sonic. Its ~8 min session limit is handled by Pipecat's built-in session continuation.
-* **First turn.** Nova 2 Sonic speaks when the context ends in a user message and an `LLMRunFrame` is queued.
+* **First turn.** Nova 2.5 Sonic speaks when the context ends in a user message and an `LLMRunFrame` is queued.
   * Inbound / WebRTC-inbound: on client connect, queue `LLMRunFrame` with a seed user message telling the agent to deliver the compiled `inbound_greeting`. Any upcoming confirmed appointment is noted in the system instruction ("Caller already has a confirmed booking on {scheduled_at}…").
   * Outbound: the agent waits for the callee to speak ("Hello?"). If no user turn starts within **1200 ms** of connect, queue the greeting run anyway.
 * RTVI is enabled so the browser simulator receives live transcripts and function-call events.
@@ -181,7 +181,7 @@ Clean, high-contrast shadcn/ui: 56px top nav, 8px grid, zinc palette plus one ac
 ---
 
 ## 7. Environment Variables
-See `.env.example`, which is the contract. Keys: Supabase URLs and keys, `DATABASE_URL`, AWS creds + `AWS_REGION=us-east-1`, `NOVA_SONIC_MODEL_ID`, `BEDROCK_CLAUDE_MODEL_ID`, Twilio creds, `TELEPHONY_PROVIDER` (`twilio` | `webrtc_only`), `PUBLIC_VOICE_WEBHOOK_BASE_URL`, `CAL_API_KEY`, and `LEAD_WEBHOOK_SECRET`.
+See `.env.example`, which is the contract. Keys: Supabase URLs and keys, `DATABASE_URL`, AWS credentials from the AWS CLI chain (`AWS_PROFILE` or the default `~/.aws` profile; explicit `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY` optional override) + `AWS_REGION=us-east-1`, `NOVA_SONIC_MODEL_ID`, `BEDROCK_CLAUDE_MODEL_ID`, Twilio creds, `TELEPHONY_PROVIDER` (`twilio` | `webrtc_only`), `PUBLIC_VOICE_WEBHOOK_BASE_URL`, `CAL_API_KEY`, and `LEAD_WEBHOOK_SECRET`.
 
 ---
 

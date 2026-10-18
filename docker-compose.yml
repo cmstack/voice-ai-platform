@@ -8,6 +8,8 @@ services:
       DATABASE_URL: postgresql://postgres:postgres@host.docker.internal:54322/postgres
       SUPABASE_URL: http://host.docker.internal:54321
     ports: ["8000:8000"]
+    volumes:
+      - ${HOME}/.aws:/root/.aws:ro   # AWS CLI profile/SSO cache for Bedrock credentials
     extra_hosts: ["host.docker.internal:host-gateway"]
 
   web:

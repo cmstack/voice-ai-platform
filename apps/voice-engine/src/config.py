@@ -16,11 +16,13 @@ class Settings(BaseSettings):
     supabase_url: str = "http://127.0.0.1:54321"
     supabase_jwt_secret: str = "super-secret-jwt-token-with-at-least-32-characters-long"
 
+    # Leave the keys empty to use the AWS CLI's credential chain (AWS_PROFILE or the default profile).
+    aws_profile: str = ""
     aws_access_key_id: str = ""
     aws_secret_access_key: str = ""
     aws_session_token: str = ""
     aws_region: str = "us-east-1"
-    nova_sonic_model_id: str = "amazon.nova-2-sonic-v1:0"
+    nova_sonic_model_id: str = "amazon.nova-2-5-sonic"
     bedrock_claude_model_id: str = "anthropic.claude-opus-5-5"
 
     telephony_provider: Literal["twilio", "webrtc_only"] = "webrtc_only"

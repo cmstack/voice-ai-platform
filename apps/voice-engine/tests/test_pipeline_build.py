@@ -22,7 +22,7 @@ async def test_nova_sonic_pipeline_builds(monkeypatch):
     rt = ToolRuntime(call=CallContext(contact_id=c["id"], call_log_id=log_id, direction="inbound", transport="webrtc"),
                      config=await db.get_agent_config(), contact=c)
     llm = build_llm("You are a test agent.", "tiffany", rt)
-    assert llm._settings.model == "amazon.nova-2-sonic-v1:0"
+    assert llm._settings.model == "amazon.nova-2-5-sonic"
     assert llm._settings.voice == "tiffany"
     assert {t.name for t in llm._tools.standard_tools} == {
         "check_calendar_availability", "book_calendar_appointment", "transfer_to_human"}

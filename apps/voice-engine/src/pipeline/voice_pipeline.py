@@ -1,6 +1,6 @@
 """The one voice loop shared by inbound, outbound and browser (WebRTC) calls.
 
-    transport.input() → user aggregator → Nova 2 Sonic (speech-to-speech + tools)
+    transport.input() → user aggregator → Nova 2.5 Sonic (speech-to-speech + tools)
       → transport.output() → assistant aggregator
 
 Nova Sonic opens its Bedrock session when it receives the first context. Inbound calls send that
@@ -32,17 +32,19 @@ from src.config import get_settings
 from src.pipeline import post_call, prompts
 from src.pipeline.tools import ToolRuntime, build_tools
 from src.schemas import CallContext
+from src.services import aws
 
 OUTBOUND_SILENCE_TIMEOUT_SECS = 1.2
 
 
 def build_llm(system_instruction: str, voice: str, rt: ToolRuntime) -> AWSNovaSonicLLMService:
     s = get_settings()
+    creds = aws.resolve_credentials()
     return AWSNovaSonicLLMService(
-        access_key_id=s.aws_access_key_id,
-        secret_access_key=s.aws_secret_access_key,
-        session_token=s.aws_session_token or None,
-        region=s.aws_region,
+        access_key_id=creds.access_key_id,
+        secret_access_key=creds.secret_access_key,
+        session_token=creds.session_token,
+        region=creds.region,
         settings=AWSNovaSonicLLMService.Settings(
             model=s.nova_sonic_model_id,
             voice=voice,

@@ -25,12 +25,15 @@ service interest) in extracted_custom_fields using short snake_case keys."""
 @lru_cache
 def _client() -> AsyncAnthropicBedrockMantle:
     s = get_settings()
-    return AsyncAnthropicBedrockMantle(
-        aws_region=s.aws_region,
-        aws_access_key=s.aws_access_key_id or None,
-        aws_secret_key=s.aws_secret_access_key or None,
-        aws_session_token=s.aws_session_token or None,
-    )
+    if s.aws_access_key_id and s.aws_secret_access_key:
+        return AsyncAnthropicBedrockMantle(
+            aws_region=s.aws_region,
+            aws_access_key=s.aws_access_key_id,
+            aws_secret_key=s.aws_secret_access_key,
+            aws_session_token=s.aws_session_token or None,
+        )
+    # Same chain as the AWS CLI: AWS_PROFILE / default profile, SSO, or an instance role.
+    return AsyncAnthropicBedrockMantle(aws_region=s.aws_region, aws_profile=s.aws_profile or None)
 
 
 def format_transcript(transcript: list[dict[str, Any]]) -> str:
