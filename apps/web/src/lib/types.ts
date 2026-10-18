@@ -91,15 +91,15 @@ export interface AgentConfig {
 
 /** Nova Sonic voice IDs (see AWS "Nova Sonic language support" docs for the full, current list). */
 export const NOVA_VOICES = [
-  { id: "tiffany", label: "Tiffany — US English, feminine" },
-  { id: "matthew", label: "Matthew — US English, masculine" },
-  { id: "amy", label: "Amy — British English, feminine" },
-  { id: "ambre", label: "Ambre — French, feminine" },
-  { id: "florian", label: "Florian — French, masculine" },
-  { id: "beatrice", label: "Beatrice — Italian, feminine" },
-  { id: "lorenzo", label: "Lorenzo — Italian, masculine" },
-  { id: "greta", label: "Greta — German, feminine" },
-  { id: "lennart", label: "Lennart — German, masculine" },
-  { id: "lupe", label: "Lupe — US Spanish, feminine" },
-  { id: "carlos", label: "Carlos — US Spanish, masculine" },
+  { id: "tiffany", label: "Tiffany (US English, feminine)" },
+  { id: "matthew", label: "Matthew (US English, masculine)" },
+  { id: "amy", label: "Amy (British English, feminine)" },
+  { id: "ambre", label: "Ambre (French, feminine)" },
+  { id: "florian", label: "Florian (French, masculine)" },
+  { id: "beatrice", label: "Beatrice (Italian, feminine)" },
+  { id: "lorenzo", label: "Lorenzo (Italian, masculine)" },
+  { id: "greta", label: "Greta (German, feminine)" },
+  { id: "lennart", label: "Lennart (German, masculine)" },
+  { id: "lupe", label: "Lupe (US Spanish, feminine)" },
+  { id: "carlos", label: "Carlos (US Spanish, masculine)" },
 ] as const;

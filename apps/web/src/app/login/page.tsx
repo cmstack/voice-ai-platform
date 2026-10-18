@@ -3,8 +3,8 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { AudioLines } from "lucide-react";
+import { ThemeToggle } from "@/components/theme-toggle";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { supabase } from "@/lib/supabase";
@@ -22,37 +22,38 @@ export default function LoginPage() {
     setError(null);
     const { error } = await supabase().auth.signInWithPassword({ email, password });
     setBusy(false);
-    if (error) return setError(error.message);
+    if (error) return setError(error.message === "Invalid login credentials" ? "That email and password don't match." : error.message);
     router.replace("/");
     router.refresh();
   }
 
   return (
-    <main className="flex min-h-screen items-center justify-center p-4">
-      <Card className="w-full max-w-sm">
-        <CardHeader>
-          <div className="mb-2 flex h-10 w-10 items-center justify-center rounded-lg bg-emerald-600 text-white">
-            <AudioLines className="h-5 w-5" />
+    <main className="relative flex min-h-dvh items-center justify-center px-4 py-12">
+      <div className="absolute right-4 top-4">
+        <ThemeToggle />
+      </div>
+      <div className="w-full max-w-sm">
+        <span className="flex size-10 items-center justify-center rounded-lg bg-brand text-brand-foreground">
+          <AudioLines className="size-5" strokeWidth={1.75} />
+        </span>
+        <h1 className="mt-6 text-2xl font-semibold tracking-tight">Sign in to Voice Agent CRM</h1>
+        <p className="mt-2 text-sm text-muted-foreground">Your pipeline, live calls and bookings in one place.</p>
+
+        <form onSubmit={onSubmit} className="mt-8 space-y-4" noValidate>
+          <div className="space-y-2">
+            <Label htmlFor="email">Email</Label>
+            <Input id="email" type="email" autoComplete="email" required value={email} onChange={(e) => setEmail(e.target.value)} aria-invalid={!!error} />
           </div>
-          <CardTitle className="font-semibold">Sign in to Voice Agent CRM</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <form onSubmit={onSubmit} className="space-y-4">
-            <div className="space-y-2">
-              <Label htmlFor="email">Email</Label>
-              <Input id="email" type="email" autoComplete="email" required value={email} onChange={(e) => setEmail(e.target.value)} />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="password">Password</Label>
-              <Input id="password" type="password" autoComplete="current-password" required value={password} onChange={(e) => setPassword(e.target.value)} />
-            </div>
-            {error && <p className="text-sm text-red-600">{error}</p>}
-            <Button type="submit" className="w-full" disabled={busy}>
-              {busy ? "Signing in…" : "Sign in"}
-            </Button>
-          </form>
-        </CardContent>
-      </Card>
+          <div className="space-y-2">
+            <Label htmlFor="password">Password</Label>
+            <Input id="password" type="password" autoComplete="current-password" required value={password} onChange={(e) => setPassword(e.target.value)} aria-invalid={!!error} aria-describedby={error ? "login-error" : undefined} />
+            {error && <p id="login-error" role="alert" className="text-sm text-danger-ink">{error}</p>}
+          </div>
+          <Button type="submit" size="lg" className="w-full" disabled={busy || !email || !password}>
+            {busy ? "Signing in…" : "Sign in"}
+          </Button>
+        </form>
+      </div>
     </main>
   );
 }

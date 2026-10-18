@@ -19,24 +19,34 @@ type Draft = Omit<AgentConfig, "objection_handlers" | "id" | "updated_at"> & { o
 
 export default function SettingsPage() {
   const [draft, setDraft] = useState<Draft | null>(null);
+  const [saved, setSaved] = useState<string>("");
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     supabase().from("agent_config").select("*").eq("id", 1).single().then(({ data, error }) => {
       if (error) return toast.error(error.message);
       const cfg = data as AgentConfig;
-      setDraft({ ...cfg, objection_handlers: Object.entries(cfg.objection_handlers ?? {}) });
+      const initial = { ...cfg, objection_handlers: Object.entries(cfg.objection_handlers ?? {}) };
+      setDraft(initial);
+      setSaved(JSON.stringify(initial));
     });
   }, []);
 
   if (!draft) {
     return (
-      <>
+      <div className="min-h-dvh">
         <TopNav />
-        <p className="p-8 text-sm text-zinc-500">Loading agent configuration…</p>
-      </>
+        <main className="mx-auto max-w-3xl space-y-6 p-4 sm:p-8" aria-busy="true" aria-label="Loading agent configuration">
+          <div className="h-7 w-64 rounded bg-muted motion-safe:animate-pulse" />
+          {[180, 220, 160, 200].map((h, i) => (
+            <div key={i} style={{ height: h }} className="rounded-lg border border-border bg-card motion-safe:animate-pulse" />
+          ))}
+        </main>
+      </div>
     );
   }
+
+  const dirty = JSON.stringify(draft) !== saved;
 
   const set = <K extends keyof Draft>(key: K, value: Draft[K]) => setDraft({ ...draft, [key]: value });
 
@@ -61,20 +71,22 @@ export default function SettingsPage() {
       })
       .eq("id", 1);
     setSaving(false);
-    if (error) toast.error(error.message);
-    else toast.success("Agent configuration saved. New calls pick it up immediately.");
+    if (error) return toast.error(error.message);
+    setSaved(JSON.stringify(draft));
+    toast.success("Saved. New calls use this configuration.");
   }
 
   return (
-    <div className="min-h-screen">
+    <div className="min-h-dvh">
       <TopNav />
-      <main className="mx-auto max-w-3xl space-y-6 p-4 pb-24 sm:p-8">
+      <main className="mx-auto max-w-3xl space-y-6 p-4 pb-28 sm:p-8 sm:pb-28">
         <div>
-          <h1 className="text-xl font-semibold">Agent & Prompt Studio</h1>
-          <p className="text-sm text-zinc-500">
-            Greetings support <code className="rounded bg-zinc-100 px-1">{"{{full_name}}"}</code>,{" "}
-            <code className="rounded bg-zinc-100 px-1">{"{{agent_name}}"}</code> and{" "}
-            <code className="rounded bg-zinc-100 px-1">{"{{company_name}}"}</code>.
+          <h1 className="text-2xl font-semibold tracking-tight">Agent & Prompt Studio</h1>
+          <p className="mt-2 max-w-[65ch] text-sm leading-relaxed text-muted-foreground">
+            How the agent sounds and what it says. Greetings can use{" "}
+            <code className="rounded bg-muted px-1 font-mono text-[12px] text-foreground">{"{{full_name}}"}</code>,{" "}
+            <code className="rounded bg-muted px-1 font-mono text-[12px] text-foreground">{"{{agent_name}}"}</code> and{" "}
+            <code className="rounded bg-muted px-1 font-mono text-[12px] text-foreground">{"{{company_name}}"}</code>.
           </p>
         </div>
 
@@ -180,9 +192,12 @@ export default function SettingsPage() {
           </CardContent>
         </Card>
 
-        <div className="fixed inset-x-0 bottom-0 border-t border-zinc-200 bg-white/90 p-3 backdrop-blur">
-          <div className="mx-auto flex max-w-3xl justify-end">
-            <Button onClick={save} disabled={saving} className="bg-emerald-600 hover:bg-emerald-700">
+        <div className="fixed inset-x-0 bottom-0 z-10 border-t border-border bg-card/90 px-4 py-3 backdrop-blur supports-[backdrop-filter]:bg-card/75">
+          <div className="mx-auto flex max-w-3xl items-center justify-end gap-3">
+            <span className="text-xs text-muted-foreground" aria-live="polite">
+              {dirty ? "Unsaved changes" : "All changes saved"}
+            </span>
+            <Button onClick={save} disabled={saving || !dirty}>
               {saving ? "Saving…" : "Save configuration"}
             </Button>
           </div>

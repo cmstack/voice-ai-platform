@@ -3,15 +3,17 @@
 import { useEffect, useRef, useState } from "react";
 import { PipecatClient, type BotOutputData, type TransportState, type UserInputData } from "@pipecat-ai/client-js";
 import { SmallWebRTCTransport } from "@pipecat-ai/small-webrtc-transport";
-import { Headphones, Mic, PhoneIncoming, PhoneOff, PhoneOutgoing, Wrench } from "lucide-react";
+import { AudioLines, Headphones, Mic, MicOff, PhoneIncoming, PhoneOff, PhoneOutgoing, Wrench } from "lucide-react";
+import { LiveDot } from "@/components/kanban-board";
 import { toast } from "sonner";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { accessToken, VOICE_ENGINE_URL } from "@/lib/supabase";
-import { formatPhone } from "@/lib/format";
+import { formatDuration, formatPhone } from "@/lib/format";
 import type { Contact } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
@@ -28,6 +30,8 @@ export function BrowserCallSim({ contacts }: { contacts: Contact[] }) {
   const [state, setState] = useState<TransportState | "idle">("idle");
   const [lines, setLines] = useState<Line[]>([]);
   const [tools, setTools] = useState<ToolEvent[]>([]);
+  const [micBlocked, setMicBlocked] = useState(false);
+  const [elapsed, setElapsed] = useState(0);
   const clientRef = useRef<PipecatClient | null>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
   const botLineId = useRef<string | null>(null);
@@ -35,6 +39,15 @@ export function BrowserCallSim({ contacts }: { contacts: Contact[] }) {
   const live = state !== "idle" && state !== "disconnected" && state !== "error";
 
   useEffect(() => () => void clientRef.current?.disconnect(), []);
+
+  // Call timer while the agent is live.
+  useEffect(() => {
+    if (state !== "ready") return;
+    const started = Date.now();
+    setElapsed(0);
+    const id = setInterval(() => setElapsed(Math.floor((Date.now() - started) / 1000)), 1000);
+    return () => clearInterval(id);
+  }, [state]);
 
   function upsertLine(id: string, role: Line["role"], text: string, final: boolean, append = false) {
     setLines((prev) => {
@@ -51,6 +64,7 @@ export function BrowserCallSim({ contacts }: { contacts: Contact[] }) {
     if (!token) return toast.error("Your session expired. Sign in again.");
     setLines([]);
     setTools([]);
+    setMicBlocked(false);
     botLineId.current = null;
     let userTurn = 0;
 
@@ -88,6 +102,9 @@ export function BrowserCallSim({ contacts }: { contacts: Contact[] }) {
           setTools((t) => [...t, { id: d.tool_call_id, name: d.function_name ?? "tool", status: "running", args: d.arguments }]),
         onLLMFunctionCallStopped: (d) =>
           setTools((t) => t.map((e) => (e.id === d.tool_call_id ? { ...e, status: d.cancelled ? "cancelled" : "done", result: d.result } : e))),
+        onDeviceError: (err) => {
+          if (err.type === "permissions" || err.type === "not-found" || err.type === "in-use") setMicBlocked(true);
+        },
         onError: (msg) => toast.error(`Voice engine error: ${JSON.stringify(msg.data ?? msg)}`),
         onDisconnected: () => setState("disconnected"),
       },
@@ -97,7 +114,12 @@ export function BrowserCallSim({ contacts }: { contacts: Contact[] }) {
       await client.connect();
     } catch (e) {
       setState("error");
-      toast.error(`Could not connect: ${(e as Error).message}`);
+      const err = e as Error;
+      if (err.name === "NotAllowedError" || /permission|denied/i.test(err.message)) {
+        setMicBlocked(true);
+      } else {
+        toast.error(`Could not connect: ${err.message}`);
+      }
     }
   }
 
@@ -109,38 +131,41 @@ export function BrowserCallSim({ contacts }: { contacts: Contact[] }) {
   return (
     <Dialog open={open} onOpenChange={(o) => { setOpen(o); if (!o) void stop(); }}>
       <DialogTrigger asChild>
-        <Button className="bg-emerald-600 hover:bg-emerald-700">
-          <Headphones className="h-4 w-4" /> Test Agent in Browser ($0 WebRTC)
+        <Button variant="brand" aria-label="Test Agent in Browser ($0 WebRTC)">
+          <Headphones strokeWidth={1.75} />
+          <span className="hidden md:inline">Test Agent in Browser ($0 WebRTC)</span>
         </Button>
       </DialogTrigger>
-      <DialogContent className="sm:max-w-2xl">
+      <DialogContent className="gap-5 sm:max-w-3xl">
         <DialogHeader>
           <DialogTitle className="font-semibold">Browser call simulator</DialogTitle>
           <DialogDescription>Talk to the agent through your microphone. No phone number needed.</DialogDescription>
         </DialogHeader>
 
-        <div className="flex flex-wrap items-end gap-4">
-          <div className="flex rounded-lg border border-zinc-200 p-1">
+        <div className="flex flex-wrap items-end gap-3">
+          <div role="radiogroup" aria-label="Call type" className="flex rounded-lg bg-muted p-1">
             {(["inbound", "outbound"] as const).map((d) => (
               <button
                 key={d}
+                role="radio"
+                aria-checked={direction === d}
                 disabled={live}
                 onClick={() => setDirection(d)}
                 className={cn(
-                  "flex items-center gap-2 rounded-md px-3 py-1.5 text-sm transition-colors disabled:opacity-60",
-                  direction === d ? "bg-zinc-900 font-semibold text-white" : "text-zinc-600 hover:bg-zinc-100",
+                  "flex h-8 items-center gap-2 rounded-md px-3 text-sm outline-none transition-colors focus-visible:ring-3 focus-visible:ring-ring/40 disabled:opacity-60",
+                  direction === d ? "bg-card font-semibold text-foreground shadow-xs" : "text-muted-foreground hover:text-foreground",
                 )}
               >
-                {d === "inbound" ? <PhoneIncoming className="h-4 w-4" /> : <PhoneOutgoing className="h-4 w-4" />}
-                {d === "inbound" ? "Simulate inbound call" : "Simulate speed-to-lead call"}
+                {d === "inbound" ? <PhoneIncoming className="size-4" strokeWidth={1.75} /> : <PhoneOutgoing className="size-4" strokeWidth={1.75} />}
+                {d === "inbound" ? "Inbound call" : "Speed-to-lead call"}
               </button>
             ))}
           </div>
           {direction === "outbound" && (
-            <div className="min-w-56 flex-1 space-y-1">
-              <Label className="text-xs text-zinc-500">Lead to call</Label>
+            <div className="min-w-56 flex-1 space-y-2">
+              <Label htmlFor="sim-lead" className="text-xs text-muted-foreground">Lead to call</Label>
               <Select value={contactId} onValueChange={setContactId} disabled={live}>
-                <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
+                <SelectTrigger id="sim-lead" className="w-full"><SelectValue /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value={NEW_TEST_LEAD}>Browser Test Lead (new)</SelectItem>
                   {contacts.map((c) => (
@@ -150,56 +175,103 @@ export function BrowserCallSim({ contacts }: { contacts: Contact[] }) {
               </Select>
             </div>
           )}
-          {live ? (
-            <Button variant="destructive" onClick={stop}><PhoneOff className="h-4 w-4" /> Hang up</Button>
-          ) : (
-            <Button onClick={start} className="bg-emerald-600 hover:bg-emerald-700"><Mic className="h-4 w-4" /> Start call</Button>
-          )}
+          <div className="ml-auto flex items-center gap-3">
+            <CallStatus state={state} elapsed={elapsed} />
+            {live ? (
+              <Button variant="destructive" onClick={stop}><PhoneOff strokeWidth={1.75} /> Hang up</Button>
+            ) : (
+              <Button variant="brand" onClick={start}><Mic strokeWidth={1.75} /> Start call</Button>
+            )}
+          </div>
         </div>
 
-        <p className="flex items-center gap-2 text-xs text-zinc-500">
-          <span className={cn("h-2 w-2 rounded-full", state === "ready" ? "animate-pulse bg-emerald-600" : live ? "bg-amber-500" : "bg-zinc-300")} />
-          {state === "idle" ? "Not connected" : state}
-        </p>
+        {micBlocked && (
+          <div role="alert" className="flex items-start gap-3 rounded-lg bg-danger-soft p-3 text-sm text-danger-ink">
+            <MicOff className="mt-0.5 size-4 shrink-0" strokeWidth={1.75} />
+            <p>
+              <span className="font-semibold">Microphone blocked.</span> Allow microphone access for this site in your browser, then
+              start the call again. Embedded preview browsers often block it; use Chrome or Safari.
+            </p>
+          </div>
+        )}
 
-        <div className="grid gap-4 sm:grid-cols-[1fr_220px]">
-          <ScrollArea className="h-80 rounded-lg border border-zinc-200 bg-zinc-50 p-3">
-            {lines.length === 0 && <p className="text-sm text-zinc-400">The live transcript appears here.</p>}
-            <div className="space-y-2">
-              {lines.map((l) => (
-                <div key={l.id} className={cn("flex", l.role === "user" ? "justify-end" : "justify-start")}>
-                  <p
-                    className={cn(
-                      "max-w-[85%] rounded-lg px-3 py-1.5 text-sm",
-                      l.role === "user" ? "bg-zinc-900 text-white" : "bg-white text-zinc-800 shadow-xs",
-                      !l.final && "opacity-60",
-                    )}
-                  >
-                    {l.text}
-                  </p>
-                </div>
-              ))}
-            </div>
+        <div className="grid gap-3 md:grid-cols-[1fr_240px]">
+          <ScrollArea className="h-80 rounded-lg border border-border bg-background">
+            {lines.length === 0 ? (
+              <div className="flex h-80 flex-col items-center justify-center gap-2 px-6 text-center">
+                <AudioLines className="size-5 text-muted-foreground" strokeWidth={1.75} />
+                <p className="text-sm font-semibold">Live transcript</p>
+                <p className="max-w-[36ch] text-xs text-muted-foreground">
+                  {direction === "inbound"
+                    ? "Start the call and the agent greets you first. What you both say appears here."
+                    : "Start the call and say hello. The agent opens once it hears you."}
+                </p>
+              </div>
+            ) : (
+              <div className="space-y-2 p-3" aria-live="polite">
+                {lines.map((l) => (
+                  <div key={l.id} className={cn("flex", l.role === "user" ? "justify-end" : "justify-start")}>
+                    <p
+                      className={cn(
+                        "max-w-[85%] rounded-lg px-3 py-1.5 text-sm leading-relaxed",
+                        l.role === "user" ? "bg-primary text-primary-foreground" : "border border-border bg-card text-foreground",
+                        !l.final && "opacity-60",
+                      )}
+                    >
+                      {l.text}
+                    </p>
+                  </div>
+                ))}
+              </div>
+            )}
           </ScrollArea>
-          <ScrollArea className="h-80 rounded-lg border border-zinc-200 p-3">
-            <p className="mb-2 flex items-center gap-1 text-xs font-semibold text-zinc-600"><Wrench className="h-3.5 w-3.5" /> Tool calls</p>
-            {tools.length === 0 && <p className="text-xs text-zinc-400">None yet.</p>}
-            <ul className="space-y-2">
-              {tools.map((t) => (
-                <li key={t.id} className="rounded-md border border-zinc-200 p-2 text-xs">
-                  <p className="flex items-center justify-between font-semibold">
-                    {t.name}
-                    <span className={cn(t.status === "running" ? "text-amber-600" : t.status === "done" ? "text-emerald-600" : "text-zinc-400")}>{t.status}</span>
-                  </p>
-                  {t.args != null && <pre className="mt-1 whitespace-pre-wrap break-all text-[10px] text-zinc-500">{JSON.stringify(t.args)}</pre>}
-                  {t.result != null && <pre className="mt-1 whitespace-pre-wrap break-all text-[10px] text-zinc-700">{JSON.stringify(t.result)}</pre>}
-                </li>
-              ))}
-            </ul>
+          <ScrollArea className="h-80 rounded-lg border border-border">
+            <div className="p-3">
+              <p className="mb-3 flex items-center gap-2 text-xs font-semibold text-muted-foreground">
+                <Wrench className="size-3.5" strokeWidth={1.75} /> Tool calls
+              </p>
+              {tools.length === 0 && (
+                <p className="text-xs leading-relaxed text-muted-foreground">
+                  Calendar lookups, bookings and transfers show here with their inputs and results.
+                </p>
+              )}
+              <ul className="space-y-2">
+                {tools.map((t) => (
+                  <li key={t.id} className="rounded-lg border border-border p-2 text-xs">
+                    <p className="flex items-center justify-between gap-2 font-semibold">
+                      <span className="truncate font-mono">{t.name}</span>
+                      <Badge variant={t.status === "done" ? "brand" : "muted"} className="capitalize">
+                        {t.status === "running" ? "Running" : t.status === "done" ? "Done" : "Cancelled"}
+                      </Badge>
+                    </p>
+                    {t.args != null && <pre className="mt-2 whitespace-pre-wrap break-all font-mono text-[11px] text-muted-foreground">{JSON.stringify(t.args)}</pre>}
+                    {t.result != null && <pre className="mt-1 whitespace-pre-wrap break-all font-mono text-[11px] text-foreground">{JSON.stringify(t.result)}</pre>}
+                  </li>
+                ))}
+              </ul>
+            </div>
           </ScrollArea>
         </div>
         <audio ref={audioRef} autoPlay className="hidden" />
       </DialogContent>
     </Dialog>
+  );
+}
+
+const STATUS_TEXT: Partial<Record<TransportState | "idle", string>> = {
+  idle: "Not connected",
+  disconnected: "Call ended",
+  error: "Could not connect",
+  ready: "Live",
+};
+
+function CallStatus({ state, elapsed }: { state: TransportState | "idle"; elapsed: number }) {
+  const text = STATUS_TEXT[state] ?? "Connecting…";
+  return (
+    <span className="flex items-center gap-2 text-xs text-muted-foreground" aria-live="polite">
+      {state === "ready" && <LiveDot />}
+      <span className={cn(state === "ready" && "font-semibold text-brand-ink", state === "error" && "text-danger-ink")}>{text}</span>
+      {state === "ready" && <span className="font-mono tabular-nums">{formatDuration(elapsed)}</span>}
+    </span>
   );
 }

@@ -2,7 +2,8 @@
 
 import { useEffect, useState } from "react";
 import { format } from "date-fns";
-import { ChevronDown, Plus, Trash2 } from "lucide-react";
+import { ChevronDown, PhoneOff, Plus, Trash2 } from "lucide-react";
+import { LiveDot } from "@/components/kanban-board";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -18,12 +19,12 @@ import { supabase } from "@/lib/supabase";
 import { STAGES, STAGE_LABELS, type CallLog, type CallOutcome, type Contact, type PipelineStage } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
-const OUTCOME_STYLES: Record<CallOutcome, string> = {
-  booked: "bg-emerald-600 text-white",
-  follow_up_requested: "bg-amber-100 text-amber-800",
-  voicemail: "bg-zinc-200 text-zinc-700",
-  transferred: "bg-sky-100 text-sky-800",
-  not_interested: "bg-red-100 text-red-700",
+const OUTCOME_VARIANT: Record<CallOutcome, "brand" | "outline" | "muted" | "danger"> = {
+  booked: "brand",
+  follow_up_requested: "outline",
+  voicemail: "muted",
+  transferred: "outline",
+  not_interested: "danger",
 };
 
 interface Props {
@@ -55,15 +56,20 @@ export function ContactDrawer({ contact, callLogVersion, onClose }: Props) {
       <SheetContent className="w-full gap-0 p-0 sm:max-w-[480px]">
         {contact && (
           <>
-            <SheetHeader className="border-b border-zinc-200 p-4">
-              <SheetTitle className="font-semibold">{contact.full_name || formatPhone(contact.phone)}</SheetTitle>
-              <SheetDescription>
-                {formatPhone(contact.phone)} · {STAGE_LABELS[contact.stage]}
-                {contact.retry_count > 0 && ` · ${contact.retry_count} retr${contact.retry_count === 1 ? "y" : "ies"}`}
+            <SheetHeader className="gap-2 border-b border-border p-4">
+              <SheetTitle className="pr-8 text-base font-semibold">{contact.full_name || formatPhone(contact.phone)}</SheetTitle>
+              <SheetDescription asChild>
+                <div className="flex flex-wrap items-center gap-2 text-xs">
+                  <span className="font-mono tabular-nums">{formatPhone(contact.phone)}</span>
+                  <Badge variant={contact.stage === "appointment_booked" ? "brand" : "outline"}>{STAGE_LABELS[contact.stage]}</Badge>
+                  {contact.retry_count > 0 && (
+                    <span>{contact.retry_count} {contact.retry_count === 1 ? "retry" : "retries"}</span>
+                  )}
+                </div>
               </SheetDescription>
             </SheetHeader>
             <Tabs defaultValue="activity" className="flex min-h-0 flex-1 flex-col">
-              <TabsList className="mx-4 mt-4">
+              <TabsList className="mx-4 mt-4 w-auto self-start">
                 <TabsTrigger value="activity">Activity & Calls</TabsTrigger>
                 <TabsTrigger value="details">Contact Details</TabsTrigger>
               </TabsList>
@@ -86,32 +92,43 @@ export function ContactDrawer({ contact, callLogVersion, onClose }: Props) {
 }
 
 function CallList({ calls }: { calls: CallLog[] }) {
-  if (calls.length === 0) return <p className="py-8 text-center text-sm text-zinc-500">No calls yet.</p>;
+  if (calls.length === 0) {
+    return (
+      <div className="mt-4 flex flex-col items-center gap-2 rounded-lg border border-dashed border-border px-6 py-10 text-center">
+        <PhoneOff className="size-5 text-muted-foreground" strokeWidth={1.75} />
+        <p className="text-sm font-semibold">No calls yet</p>
+        <p className="max-w-[32ch] text-xs text-muted-foreground">
+          Calls with this lead appear here with a summary, transcript and recording.
+        </p>
+      </div>
+    );
+  }
   return (
     <ol className="space-y-4 py-2">
       {calls.map((call) => (
-        <li key={call.id} className="rounded-lg border border-zinc-200 bg-white p-3">
-          <div className="flex items-center justify-between gap-2">
-            <div className="flex items-center gap-2">
-              <Badge variant="outline" className="capitalize">{call.direction}</Badge>
+        <li key={call.id} className="rounded-lg border border-border bg-card p-3">
+          <div className="flex items-start justify-between gap-3">
+            <div className="flex flex-wrap items-center gap-1.5">
               {call.outcome ? (
-                <Badge className={cn("border-0 capitalize", OUTCOME_STYLES[call.outcome])}>{call.outcome.replaceAll("_", " ")}</Badge>
+                <Badge variant={OUTCOME_VARIANT[call.outcome]} className="capitalize">{call.outcome.replaceAll("_", " ")}</Badge>
               ) : (
-                <Badge className="border-0 bg-emerald-50 text-emerald-700">in progress</Badge>
+                <Badge variant="brand"><LiveDot /> In progress</Badge>
               )}
-              {call.sentiment && <span className="text-xs capitalize text-zinc-500">{call.sentiment}</span>}
+              <Badge variant="muted" className="capitalize">{call.direction === "webrtc" ? "Browser" : call.direction}</Badge>
+              {call.sentiment && <span className="text-xs capitalize text-muted-foreground">{call.sentiment}</span>}
             </div>
-            <span className="text-xs text-zinc-500">
-              {format(new Date(call.created_at), "MMM d, h:mm a")} · {formatDuration(call.duration_seconds)}
-            </span>
+            <div className="shrink-0 text-right text-xs text-muted-foreground">
+              <p>{format(new Date(call.created_at), "MMM d, h:mm a")}</p>
+              <p className="font-mono tabular-nums">{formatDuration(call.duration_seconds)}</p>
+            </div>
           </div>
-          {call.summary && <p className="mt-3 rounded-md bg-zinc-50 p-2 text-sm text-zinc-700">{call.summary}</p>}
+          {call.summary && <p className="mt-3 text-sm leading-relaxed text-foreground">{call.summary}</p>}
           {call.recording_url && (
             <audio controls preload="none" src={call.recording_url} className="mt-3 h-8 w-full" />
           )}
           {(call.transcript?.length ?? 0) > 0 && (
             <Collapsible className="mt-3">
-              <CollapsibleTrigger className="group flex items-center gap-1 text-xs font-semibold text-zinc-600 hover:text-zinc-900">
+              <CollapsibleTrigger className="group flex items-center gap-1 rounded text-xs font-semibold text-muted-foreground outline-none hover:text-foreground focus-visible:ring-3 focus-visible:ring-ring/40">
                 <ChevronDown className="h-3.5 w-3.5 transition-transform group-data-[state=open]:rotate-180" />
                 Transcript ({call.transcript!.length} turns)
               </CollapsibleTrigger>
@@ -120,15 +137,15 @@ function CallList({ calls }: { calls: CallLog[] }) {
                   <div key={i} className={cn("flex flex-col", line.role === "user" ? "items-end" : "items-start")}>
                     <div
                       className={cn(
-                        "max-w-[85%] rounded-lg px-3 py-1.5 text-sm",
-                        line.role === "user" ? "bg-zinc-900 text-white" : "bg-zinc-100 text-zinc-800",
+                        "max-w-[85%] rounded-lg px-3 py-1.5 text-sm leading-relaxed",
+                        line.role === "user" ? "bg-primary text-primary-foreground" : "bg-muted text-foreground",
                       )}
                     >
                       {line.content}
                     </div>
-                    <span className="mt-0.5 text-[10px] text-zinc-400">
-                      {line.role === "user" ? "Caller" : "Agent"}
-                      {line.timestamp && ` · ${format(new Date(line.timestamp), "h:mm:ss a")}`}
+                    <span className="mt-0.5 flex gap-2 text-[11px] text-muted-foreground">
+                      <span>{line.role === "user" ? "Caller" : "Agent"}</span>
+                      {line.timestamp && <span className="font-mono tabular-nums">{format(new Date(line.timestamp), "h:mm:ss a")}</span>}
                     </span>
                   </div>
                 ))}
