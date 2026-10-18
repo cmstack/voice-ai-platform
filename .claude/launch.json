@@ -1,0 +1,17 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "voice-engine",
+      "runtimeExecutable": "uv",
+      "runtimeArgs": ["run", "--directory", "apps/voice-engine", "uvicorn", "src.main:app", "--port", "8010"],
+      "port": 8010
+    },
+    {
+      "name": "web",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["--prefix", "apps/web", "run", "dev"],
+      "port": 3000
+    }
+  ]
+}

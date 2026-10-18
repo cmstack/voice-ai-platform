@@ -1,0 +1,21 @@
+# The database stack is run by the Supabase CLI (`supabase start`), not by compose.
+# These services reach it through host.docker.internal.
+services:
+  voice-engine:
+    build: ./apps/voice-engine
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@host.docker.internal:54322/postgres
+      SUPABASE_URL: http://host.docker.internal:54321
+    ports: ["8000:8000"]
+    extra_hosts: ["host.docker.internal:host-gateway"]
+
+  web:
+    build:
+      context: ./apps/web
+      args:
+        NEXT_PUBLIC_SUPABASE_URL: ${NEXT_PUBLIC_SUPABASE_URL}
+        NEXT_PUBLIC_SUPABASE_ANON_KEY: ${NEXT_PUBLIC_SUPABASE_ANON_KEY}
+        NEXT_PUBLIC_VOICE_ENGINE_URL: ${NEXT_PUBLIC_VOICE_ENGINE_URL}
+    ports: ["3000:3000"]
+    depends_on: [voice-engine]
