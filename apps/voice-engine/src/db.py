@@ -59,28 +59,78 @@ async def get_contact(contact_id: UUID) -> dict[str, Any] | None:
 
 
 async def upsert_lead(
-    phone: str, full_name: str | None, email: str | None, custom_fields: dict[str, Any]
+    phone: str,
+    full_name: str | None,
+    email: str | None,
+    custom_fields: dict[str, Any],
+    consent_source: str | None = None,
 ) -> dict[str, Any]:
-    """Speed-to-lead upsert: a fresh form submission always resets the card to new_lead."""
+    """Speed-to-lead upsert: a fresh form submission always resets the card to new_lead.
+
+    Consent is only ever added, never cleared: a later submission without consent keeps the record.
+    """
     row = await pool().fetchrow(
         """
-        INSERT INTO contacts (phone, full_name, email, custom_fields, stage)
-        VALUES ($1, $2, $3, $4, 'new_lead')
+        INSERT INTO contacts (phone, full_name, email, custom_fields, stage, consent_at, consent_source)
+        VALUES ($1, $2, $3, $4, 'new_lead', CASE WHEN $5::text IS NULL THEN NULL ELSE NOW() END, $5)
         ON CONFLICT (phone) DO UPDATE SET
             full_name = COALESCE(EXCLUDED.full_name, contacts.full_name),
             email = COALESCE(EXCLUDED.email, contacts.email),
             custom_fields = COALESCE(contacts.custom_fields, '{}'::jsonb) || EXCLUDED.custom_fields,
             stage = 'new_lead',
             retry_count = 0,
-            next_follow_up_at = NULL
+            next_follow_up_at = NULL,
+            consent_at = COALESCE(EXCLUDED.consent_at, contacts.consent_at),
+            consent_source = COALESCE(EXCLUDED.consent_source, contacts.consent_source)
         RETURNING *
         """,
         phone,
         full_name,
         email,
         custom_fields,
+        consent_source,
     )
     return dict(row)
+
+
+async def record_consent(contact_id: UUID, source: str) -> None:
+    """Record consent if none is on file yet (keeps the original, earliest record)."""
+    await pool().execute(
+        "UPDATE contacts SET consent_at = NOW(), consent_source = $2 WHERE id = $1 AND consent_at IS NULL",
+        contact_id,
+        source,
+    )
+
+
+async def queue_dial(contact_id: UUID, at: datetime) -> None:
+    """Keep the card where it is but have the retry worker dial it at `at`."""
+    await pool().execute(
+        "UPDATE contacts SET next_follow_up_at = $2 WHERE id = $1", contact_id, at
+    )
+
+
+async def count_dials(*, since: datetime, contact_id: UUID | None = None) -> int:
+    """Real dial attempts (rows that got a provider call id) since `since`."""
+    return await pool().fetchval(
+        """
+        SELECT count(*) FROM call_logs
+        WHERE direction = 'outbound' AND provider_call_id IS NOT NULL AND created_at >= $1
+          AND ($2::uuid IS NULL OR contact_id = $2)
+        """,
+        since,
+        contact_id,
+    )
+
+
+async def delete_call_log(call_log_id: UUID) -> None:
+    await pool().execute("DELETE FROM call_logs WHERE id = $1 AND outcome IS NULL", call_log_id)
+
+
+async def count_upcoming_appointments(contact_id: UUID) -> int:
+    return await pool().fetchval(
+        "SELECT count(*) FROM appointments WHERE contact_id = $1 AND status = 'confirmed' AND scheduled_at >= NOW()",
+        contact_id,
+    )
 
 
 async def set_stage(contact_id: UUID, stage: str) -> None:
@@ -305,7 +355,7 @@ async def claim_due_follow_ups(limit: int = 5) -> list[tuple[dict[str, Any], UUI
         rows = await conn.fetch(
             """
             SELECT * FROM contacts
-            WHERE stage IN ('no_answer_retry', 'follow_up_requested')
+            WHERE stage IN ('new_lead', 'no_answer_retry', 'follow_up_requested')
               AND next_follow_up_at IS NOT NULL AND next_follow_up_at <= NOW()
             ORDER BY next_follow_up_at
             LIMIT $1

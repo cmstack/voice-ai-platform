@@ -13,6 +13,8 @@ from src.services import retry_worker
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings = get_settings()
+    for problem in settings.check_security():  # raises in production
+        logger.warning(f"Insecure configuration (allowed only in development): {problem}")
     await db.init_pool()
     scheduler = retry_worker.start() if settings.enable_retry_worker else None
     logger.info(f"Voice engine up (telephony={settings.telephony_provider})")

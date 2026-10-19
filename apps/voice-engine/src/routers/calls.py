@@ -27,6 +27,7 @@ from src.pipeline.voice_pipeline import VoiceSession
 from src.schemas import CallContext, normalize_phone
 from src.services import telephony
 from src.services.auth import require_user
+from src.services.rate_limit import browser_calls, limit
 
 router = APIRouter(tags=["calls"])
 
@@ -107,6 +108,11 @@ def _now() -> datetime:
 
 @router.websocket("/ws/voice")
 async def voice_ws(websocket: WebSocket) -> None:
+    # Twilio signs the Media Streams handshake; reject anything else before accepting.
+    if not telephony.is_valid_ws_signature(websocket.headers.get("x-twilio-signature")):
+        logger.warning("Rejecting media stream: missing or invalid X-Twilio-Signature")
+        await websocket.close(code=1008)
+        return
     await websocket.accept()
     transport_type, call_data = await parse_telephony_websocket(websocket)
     if transport_type != "twilio":
@@ -193,11 +199,24 @@ async def _prepare_webrtc_call(request_data: dict) -> CallContext:
     return CallContext(contact_id=contact["id"], call_log_id=call_log_id, direction=direction, transport="webrtc")
 
 
-@router.post("/api/webrtc/offer")
+async def _run_browser_call(session: VoiceSession) -> None:
+    try:
+        await session.run()
+    finally:
+        browser_calls.release()
+
+
+@router.post("/api/webrtc/offer", dependencies=[Depends(limit("webrtc"))])
 async def webrtc_offer(offer: WebRTCOffer, _user: dict = Depends(require_user)) -> dict:
     call: CallContext | None = None
     if not offer.pc_id:  # renegotiations reuse the existing session
-        call = await _prepare_webrtc_call(offer.request_data or {})
+        if not browser_calls.try_acquire():
+            raise HTTPException(429, "too many browser calls in progress; hang up another call first")
+        try:
+            call = await _prepare_webrtc_call(offer.request_data or {})
+        except Exception:
+            browser_calls.release()
+            raise
 
     async def on_connection(connection: SmallWebRTCConnection):
         assert call is not None
@@ -207,13 +226,24 @@ async def webrtc_offer(offer: WebRTCOffer, _user: dict = Depends(require_user)) 
             webrtc_connection=connection,
             params=TransportParams(audio_in_enabled=True, audio_out_enabled=True),
         )
-        _spawn(VoiceSession(transport, call, enable_rtvi=True).run())
+        _spawn(_run_browser_call(VoiceSession(transport, call, enable_rtvi=True)))
 
-    answer = await _webrtc.handle_web_request(
-        SmallWebRTCRequest(sdp=offer.sdp, type=offer.type, pc_id=offer.pc_id,
-                           restart_pc=offer.restart_pc, request_data=offer.request_data),
-        on_connection,
-    )
+    started = False
+
+    async def on_connection_tracked(connection: SmallWebRTCConnection):
+        nonlocal started
+        started = True
+        await on_connection(connection)
+
+    try:
+        answer = await _webrtc.handle_web_request(
+            SmallWebRTCRequest(sdp=offer.sdp, type=offer.type, pc_id=offer.pc_id,
+                               restart_pc=offer.restart_pc, request_data=offer.request_data),
+            on_connection_tracked,
+        )
+    finally:
+        if call is not None and not started:
+            browser_calls.release()  # the session never started, so free its slot
     if answer is None:
         raise HTTPException(500, "no SDP answer")
     if call is not None:
@@ -222,7 +252,7 @@ async def webrtc_offer(offer: WebRTCOffer, _user: dict = Depends(require_user)) 
     return answer
 
 
-@router.patch("/api/webrtc/offer")
+@router.patch("/api/webrtc/offer", dependencies=[Depends(limit("webrtc_ice"))])
 async def webrtc_ice(patch: WebRTCPatch, _user: dict = Depends(require_user)) -> dict:
     candidates = [
         IceCandidate(candidate=c["candidate"], sdp_mid=c.get("sdp_mid", c.get("sdpMid")),

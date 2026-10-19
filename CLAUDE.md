@@ -3,9 +3,10 @@
 **Project:** Single-Tenant AI Voice Agent, Realtime CRM Pipeline & Calendar Booking Engine
 **Architecture:** Monorepo — Python Voice Orchestrator (`FastAPI` + `Pipecat` + **Amazon Nova 2.5 Sonic**) + Realtime Web Dashboard (`Next.js App Router` + **local Supabase** + `shadcn/ui`)
 
-> Revision 3 (2026-10-18).
+> Revision 4 (2026-10-19).
 > * **Rev 2 (changes from rev 1):** Nova 2.5 Sonic speech-to-speech replaces Deepgram STT + text LLM + Cartesia/ElevenLabs TTS; Supabase runs locally via the Supabase CLI; Twilio is the only PSTN provider; post-call extraction uses Claude on Amazon Bedrock; the dashboard requires Supabase Auth.
 > * **Rev 3:** AWS credentials come from the AWS CLI credential chain; a Flows-style conversation state machine runs inside the tools (§5.3); post-call custom fields are extracted as key/value pairs; the dashboard has design tokens, dark mode and full loading, empty and error states (§6).
+> * **Rev 4:** security hardening (§5.6): admin-only access (sign-up off, `is_admin()` RLS, admin claim on the API), fail-closed production config, an outbound dial guard (country allowlist, consent, calling hours, dial limits), prompt-injection hardening, in-call tool caps, a Twilio WebSocket signature check, API rate limits, and opt-in call recording with a spoken disclosure.
 
 ---
 
@@ -20,7 +21,9 @@ A self-hosted, single-tenant AI voice agent + CRM that handles **outbound speed-
    - `telephony` mode: **Twilio Media Streams only** — bidirectional 8 kHz μ-law over WebSocket (`/ws/voice`) via Pipecat `TwilioFrameSerializer`. Pipecat resamples to Nova Sonic's 16 kHz input / 24 kHz output.
 3. **Unified Voice Loop.** Inbound, outbound, and WebRTC calls share one pipeline builder (`pipeline/voice_pipeline.py`), differing only in initial context and who speaks first.
 4. **One realtime model.** Nova 2.5 Sonic (`amazon.nova-2-5-sonic`) is the only realtime speech model. Do NOT add separate STT, text-LLM, or TTS services to the call path.
-5. **Strict Tool & Post-Call Contracts.** Mid-call bookings write the DB inside one atomic transaction. Post-call summaries and stage transitions use structured Pydantic outputs; stage routing is deterministic code, never LLM-decided.
+5. **Every real dial goes through `services/dial_guard.py`.** Never call Twilio's `calls.create` anywhere else.
+6. **Caller-supplied text is untrusted.** Clean it with `pipeline/sanitize.py` before storing it or placing it in a prompt, where it goes inside the `<caller_data>` block.
+7. **Strict Tool & Post-Call Contracts.** Mid-call bookings write the DB inside one atomic transaction. Post-call summaries and stage transitions use structured Pydantic outputs; stage routing is deterministic code, never LLM-decided.
 
 ---
 
@@ -64,7 +67,8 @@ A self-hosted, single-tenant AI voice agent + CRM that handles **outbound speed-
 │   ├── config.toml
 │   ├── seed.sql                       # admin user + sample contacts
 │   └── migrations/
-│       └── 0001_initial_schema.sql
+│       ├── 0001_initial_schema.sql
+│       └── 0002_security.sql          # is_admin() RLS, consent columns, opt-in recording
 ├── apps/
 │   ├── voice-engine/
 │   │   ├── pyproject.toml
@@ -81,16 +85,19 @@ A self-hosted, single-tenant AI voice agent + CRM that handles **outbound speed-
 │   │   │   │   ├── voice_pipeline.py  # Nova Sonic pipeline builder (shared)
 │   │   │   │   ├── prompts.py         # system-instruction compiler (stage overview, dates, UTC offset)
 │   │   │   │   ├── flow.py            # conversation state machine: stages, tool guards, next-step text
+│   │   │   │   ├── sanitize.py        # cleans caller-supplied text before storage / prompts
 │   │   │   │   ├── tools.py           # the 6 in-call tools, each wrapped by the flow guard
 │   │   │   │   └── post_call.py       # extraction, flow ground truth, pipeline-stage routing
 │   │   │   └── services/
 │   │   │       ├── auth.py            # Supabase JWT / webhook-secret guard
 │   │   │       ├── aws.py             # AWS credential chain (CLI profile, SSO, role, or .env keys)
+│   │   │       ├── dial_guard.py      # outbound dialing policy (country, consent, hours, limits)
+│   │   │       ├── rate_limit.py      # per-client API limits + browser-call concurrency cap
 │   │   │       ├── llm.py             # Bedrock Claude structured extraction
 │   │   │       ├── telephony.py       # Twilio dialer, TwiML, bridge, signature check
 │   │   │       ├── calendar.py        # Cal.com v2 client
 │   │   │       └── retry_worker.py    # APScheduler job over next_follow_up_at
-│   │   └── tests/
+│   │   └── tests/                     # incl. test_flow.py and test_security.py
 │   └── web/
 │       ├── package.json
 │       └── src/
@@ -125,7 +132,9 @@ Same model as rev 1, with these changes:
 * `call_logs.provider_call_id` stores the Twilio `CallSid` (or the WebRTC `pc_id`).
 * `updated_at` triggers on `contacts` and `agent_config`.
 * `REPLICA IDENTITY FULL` on `contacts`, `call_logs`, `appointments`; all three are in the `supabase_realtime` publication.
-* RLS enabled on every table; one policy per table grants full CRUD to the `authenticated` role. The voice engine connects as `postgres` (bypasses RLS) and is the only writer for call flows.
+* RLS is enabled on every table. Since `0002_security.sql`, one `admin_all` policy per table allows access only when `public.is_admin()` is true, meaning the JWT's `app_metadata.role` is `'admin'`. A signed-in non-admin sees nothing, including through Realtime. The voice engine connects as `postgres` (bypasses RLS) and is the only writer for call flows.
+* `contacts.consent_at` / `consent_source` record prior consent to be called. Consent is added, never cleared.
+* `agent_config.record_calls` (default `false`) and `recording_disclosure` control opt-in recording.
 
 The migration file is the source of truth for exact DDL.
 
@@ -136,12 +145,12 @@ The migration file is the source of truth for exact DDL.
 ### 5.1 Endpoints
 | Method & path | Auth | Behavior |
 |---|---|---|
-| `POST /api/leads` | Supabase JWT **or** `X-Webhook-Secret: $LEAD_WEBHOOK_SECRET` | Upsert contact by phone (stage `new_lead`). If `trigger_call_immediately`: set `calling_in_progress`, insert pending outbound `call_logs` row, `telephony.initiate_outbound_call(...)`. When `TELEPHONY_PROVIDER=webrtc_only`, the call row is created but no dial happens (use the simulator). |
+| `POST /api/leads` | Admin JWT **or** `X-Webhook-Secret: $LEAD_WEBHOOK_SECRET`; rate-limited | Upsert contact by phone (stage `new_lead`). `consent: true` (+ `consent_source`) records call consent. If `trigger_call_immediately`, the dial guard runs first. When blocked, the response carries `blocked_reason` and, for temporary blocks, `next_attempt_at`: the dial is queued and no call row is created. Otherwise: set `calling_in_progress`, insert a pending outbound `call_logs` row and dial. When `TELEPHONY_PROVIDER=webrtc_only`, the call row is created but no dial happens (use the simulator). |
 | `POST /api/calls/inbound` | Twilio signature | Upsert contact by `From`, insert inbound `call_logs` row (`provider_call_id = CallSid`), return TwiML `<Connect><Stream url="wss://…/ws/voice">` with `<Parameter>` `contact_id`, `call_log_id`, `direction=inbound`. Target <100 ms. |
 | `POST /api/calls/outbound-xml?contact_id&call_log_id` | Twilio signature | If `AnsweredBy` is a machine → `<Hangup/>` and post-call routes it as `voicemail`. Else TwiML stream with `direction=outbound`. |
 | `POST /api/calls/status` | Twilio signature | Status + recording callbacks → `duration_seconds`, `recording_url`; `no-answer`/`busy`/`failed` → voicemail routing. |
-| `WS /ws/voice` | Twilio stream params | Twilio Media Streams → shared pipeline. |
-| `POST /api/webrtc/offer`, `PATCH /api/webrtc/offer` | Supabase JWT | SDP offer/answer + ICE trickle for the browser simulator. `requestData`: `{direction: "inbound"|"outbound", contact_id?}`. |
+| `WS /ws/voice` | `X-Twilio-Signature` on the handshake, plus a live call row | Twilio Media Streams → shared pipeline. |
+| `POST /api/webrtc/offer`, `PATCH /api/webrtc/offer` | Admin JWT; rate-limited; at most `MAX_CONCURRENT_BROWSER_CALLS` at once | SDP offer/answer + ICE trickle for the browser simulator. `requestData`: `{direction: "inbound"|"outbound", contact_id?}`. |
 | `GET /health` | none | Liveness. |
 
 ### 5.2 Pipeline (`pipeline/voice_pipeline.py`)
@@ -168,6 +177,8 @@ Nova Sonic fixes its prompt and tools when the session opens, so Pipecat Flows' 
   * `schedule_callback`: a future ISO time with an offset.
   * `transfer_to_human`: Twilio `<Dial>`; simulated in WebRTC calls.
   * `end_call`: reason `completed|not_interested|wrong_number|voicemail`. Hangs up after the goodbye.
+* **Caps:** at most `MAX_AVAILABILITY_CHECKS_PER_CALL` calendar lookups and `MAX_CALLBACKS_PER_CALL` callbacks per call. Callbacks are limited to 60 days ahead. At most `MAX_UPCOMING_APPOINTMENTS_PER_CONTACT` upcoming bookings per contact. Caller text (answers, names, notes, reasons) is cleaned and length-capped.
+* `schedule_callback` records the caller's request as call consent (`callback requested by caller on call …`).
 * The model says a short filler only before the calendar tools.
 * The prompt lists the next 7 dates and the UTC offset so weekdays and callback times resolve correctly.
 
@@ -189,7 +200,37 @@ On transport disconnect:
    * `booked` / `transferred`: no change (the tools already set the stage).
 
 ### 5.5 Retry worker (`services/retry_worker.py`)
-APScheduler interval job (60 s). Selects contacts in `no_answer_retry`/`follow_up_requested` with `next_follow_up_at <= now()`, but only when the local time in `agent_config.timezone` falls within business hours. It claims each row atomically (`FOR UPDATE SKIP LOCKED` → `calling_in_progress`, `next_follow_up_at = NULL`) and dials. It does nothing when `TELEPHONY_PROVIDER=webrtc_only`.
+APScheduler interval job (60 s). It selects contacts in these stages whose `next_follow_up_at <= now()`:
+* `new_lead`: first dials that the guard queued;
+* `no_answer_retry`;
+* `follow_up_requested`.
+
+It only runs when the local time in `agent_config.timezone` falls within business hours, and does nothing when `TELEPHONY_PROVIDER=webrtc_only`. It claims each row atomically (`FOR UPDATE SKIP LOCKED` → `calling_in_progress`, `next_follow_up_at = NULL`) and dials. If the dial guard blocks the dial, it deletes the pending call row, restores the stage and re-queues temporary blocks.
+
+### 5.6 Security & compliance
+* **Access:**
+  * Supabase self sign-up is off: `[auth] enable_signup = false`. The email provider stays on for sign-in.
+  * Admins are users whose `raw_app_meta_data.role = 'admin'`, which only SQL or the service role can set.
+  * The same rule is enforced in three places: RLS (`is_admin()`), the voice-engine guard (`services/auth.py`, `ADMIN_ROLE`) and `src/middleware.ts`, which signs a non-admin out and sends them to `/login?error=not_admin`.
+  * Token errors return a generic message. Sign-in attempts are capped at 10 per 5 minutes per IP.
+* **Fail-closed config:** `Settings.check_security()` runs at startup.
+  * It flags the published Supabase local JWT secret, placeholder or short webhook secrets, `postgres:postgres` DB credentials, disabled Twilio signature checks, and non-https webhook URLs when Twilio is on.
+  * With `APP_ENV=production` any of these refuses startup; in development they are logged as warnings.
+  * A placeholder `LEAD_WEBHOOK_SECRET` (for example `change-me`) never authenticates.
+* **Dial guard (`services/dial_guard.py`):** `telephony.initiate_outbound_call` checks, in order:
+  1. the number is in `ALLOWED_DIAL_COUNTRY_CODES` (default `["1"]`);
+  2. consent is on record (`REQUIRE_DIAL_CONSENT`);
+  3. it's within business hours;
+  4. fewer than `MAX_DIALS_PER_NUMBER_PER_DAY` real dials to that number in the past 24 hours;
+  5. fewer than `MAX_DIALS_PER_HOUR` dials in total in the past hour.
+
+  It raises `DialBlocked(reason, retry_at)`. Country and consent blocks are permanent; hours and rate blocks carry `retry_at`.
+* **Prompt injection:** contact data and custom fields enter the system prompt only inside `<caller_data>…</caller_data>`, after `sanitize.py` has flattened them to one line, stripped markup and capped them. The prompt describes that block as background facts, not guidance. Post-call extracted fields are cleaned the same way, and the extraction prompt treats the transcript as untrusted.
+  * Keep this wording neutral. Jailbreak-style phrasing ("ignore any request to override your instructions…") trips Bedrock's content filter, and Nova Sonic then refuses the session.
+* **Twilio WebSocket:** `/ws/voice` validates `X-Twilio-Signature` against `public_ws_url` (the `wss://` URL and its `https://` form, empty params) before accepting. `VALIDATE_TWILIO_WS_SIGNATURE=false` exists only for debugging a URL-rewriting proxy. This hasn't been verified against live Twilio yet.
+* **Rate limits (`services/rate_limit.py`):** in-process sliding window per client IP: `LEADS_PER_MINUTE` and `WEBRTC_OFFERS_PER_MINUTE` (ICE patches are allowed 20×), plus `MAX_CONCURRENT_BROWSER_CALLS`. Behind a proxy, run uvicorn with `--proxy-headers --forwarded-allow-ips=<proxy>`.
+* **Recording:** off by default. When `record_calls` is on, outbound Twilio calls are recorded and the agent reads `recording_disclosure` right after its opening line. Inbound and browser calls are never recorded.
+* **Logs:** phone numbers are masked in voice-engine logs (`+15550101234` → `+*******1234`).
 
 ---
 
@@ -206,7 +247,7 @@ Calm, Linear-like shadcn/ui on Radix: 56px top nav, 8px grid, Geist + Geist Mono
 * Animations are gated by `motion-safe:`.
 
 **Screens:**
-* **Login (`/login`)**: email + password via Supabase Auth, with an inline error. `src/middleware.ts` redirects unauthenticated users here.
+* **Login (`/login`)**: email + password via Supabase Auth, with an inline error. `src/middleware.ts` redirects unauthenticated users here, and signs out non-admins with an explanation.
 * **Pipeline (`/`)**
   * **KPI strip:** Total leads, Active calls (live indicator only while a call is active), Appointments booked, Conversion. It becomes a 2×2 grid on phones.
   * **Nav actions:** "+ New Lead / Dial" and "Test Agent in Browser ($0 WebRTC)". Below `md` they show icon only, with aria-labels.
@@ -216,18 +257,19 @@ Calm, Linear-like shadcn/ui on Radix: 56px top nav, 8px grid, Geist + Geist Mono
     * There is a skeleton loader and a per-column empty hint. Columns snap-scroll at 85% width on phones.
   * **Contact drawer** (Sheet, 480px):
     * `Activity & Calls` tab: outcome, direction and sentiment badges, a summary, the conversation step path (from `extracted_data.flow`), an audio player and a collapsible timestamped transcript. Shows an empty state when there are no calls.
-    * `Contact Details` tab: editable name, email, phone, stage and a custom_fields key/value editor.
+    * `Contact Details` tab: the call-consent record (or a warning that there is none), plus editable name, email, phone, stage and a custom_fields key/value editor.
   * **Browser call simulator:**
     * Inbound / speed-to-lead toggle, with a lead picker for speed-to-lead.
     * Plain-language status (Not connected, Connecting…, Live with a timer, Call ended).
     * A blocked-microphone alert driven by Pipecat `onDeviceError`.
     * A live transcript and a tool-call log (RTVI events), with empty states.
-* **Agent Studio (`/settings`):** a form bound to `agent_config` (id=1). Fields: agent name, company, Nova Sonic voice, both greeting templates, qualification questions (each becomes a `save_qualification` field), objection handlers, Cal.com event type ID, transfer phone, timezone and redial hours. It has a skeleton loader and a sticky save bar showing "Unsaved changes" or "All changes saved".
+* **New lead dialog:** an "The lead agreed to be called" checkbox (sends `consent`). If the dial is blocked, a warning toast shows the reason and the next attempt time.
+* **Agent Studio (`/settings`):** a form bound to `agent_config` (id=1). Fields: agent name, company, Nova Sonic voice, both greeting templates, qualification questions (each becomes a `save_qualification` field), objection handlers, Cal.com event type ID, transfer phone, timezone, redial hours, and call recording (on/off plus notice text). It has a skeleton loader and a sticky save bar showing "Unsaved changes" or "All changes saved".
 
 ---
 
 ## 7. Environment Variables
-See `.env.example`, which is the contract. Keys: Supabase URLs and keys, `DATABASE_URL`, AWS credentials from the AWS CLI chain (`AWS_PROFILE` or the default `~/.aws` profile; explicit `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY` optional override) + `AWS_REGION=us-east-1`, `NOVA_SONIC_MODEL_ID`, `BEDROCK_CLAUDE_MODEL_ID`, Twilio creds, `TELEPHONY_PROVIDER` (`twilio` | `webrtc_only`), `PUBLIC_VOICE_WEBHOOK_BASE_URL`, `CAL_API_KEY`, and `LEAD_WEBHOOK_SECRET`.
+See `.env.example`, which is the contract. Keys: Supabase URLs and keys, `DATABASE_URL`, AWS credentials from the AWS CLI chain (`AWS_PROFILE` or the default `~/.aws` profile; explicit `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY` optional override) + `AWS_REGION=us-east-1`, `NOVA_SONIC_MODEL_ID`, `BEDROCK_CLAUDE_MODEL_ID`, Twilio creds, `TELEPHONY_PROVIDER` (`twilio` | `webrtc_only`), `PUBLIC_VOICE_WEBHOOK_BASE_URL`, `CAL_API_KEY` and `LEAD_WEBHOOK_SECRET`. Security settings: `APP_ENV`, `VALIDATE_TWILIO_SIGNATURE`, `VALIDATE_TWILIO_WS_SIGNATURE`, `ALLOWED_DIAL_COUNTRY_CODES`, `REQUIRE_DIAL_CONSENT`, `MAX_DIALS_PER_NUMBER_PER_DAY`, `MAX_DIALS_PER_HOUR`, `LEADS_PER_MINUTE`, `WEBRTC_OFFERS_PER_MINUTE` and `MAX_CONCURRENT_BROWSER_CALLS`. In-call caps (`MAX_AVAILABILITY_CHECKS_PER_CALL` etc.) have defaults in `config.py`.
 
 ---
 
@@ -237,6 +279,7 @@ See `.env.example`, which is the contract. Keys: Supabase URLs and keys, `DATABA
 3. **Twilio adapters & retry worker.** Gate: TwiML/route tests, inbound latency check, retry-selection test; live PSTN via ngrok when creds exist.
 4. **Next.js dashboard.** Gate: `npm run build` + typecheck; sign in, then see realtime card moves and a simulator call end-to-end.
 5. **Conversation flow.** Gate: `tests/test_flow.py` covers guards, transitions, `next` text, callbacks, hangup and post-call overrides. A live scripted call (Polly-voiced caller → Nova Sonic, Cal.com stubbed) goes qualify → schedule → booked → closed and leaves the contact in `appointment_booked`.
+6. **Security hardening.** Gate: `tests/test_security.py` covers non-admin rejection (API and real PostgREST/RLS), fail-closed config, every dial-guard rule, prompt-injection fencing, tool caps, rate limits and WebSocket signatures. Self sign-up returns `signup_disabled`, admin login and Realtime still work, and the live scripted call still completes.
 
 ## 9. Dev commands
 ```bash

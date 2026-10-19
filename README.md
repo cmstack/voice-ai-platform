@@ -54,9 +54,17 @@ From the repo root:
 supabase start
 ```
 
-The first run downloads Docker images, which takes a few minutes. It then applies
-`supabase/migrations/0001_initial_schema.sql` and `supabase/seed.sql`. Supabase Studio is at
-http://127.0.0.1:54323.
+The first run downloads Docker images, which takes a few minutes. It then applies the migrations
+in `supabase/migrations/` and `supabase/seed.sql`. Supabase Studio is at http://127.0.0.1:54323.
+
+Self sign-up is turned off. Only **admins** can use the dashboard and its API, meaning users whose
+`app_metadata.role` is `admin`. The seed creates one local admin (see [Run it](#3-run-it)). To make
+another user an admin, create them in Studio (Authentication → Add user), then run this in the SQL
+editor:
+
+```sql
+update auth.users set raw_app_meta_data = raw_app_meta_data || '{"role":"admin"}' where email = 'you@example.com';
+```
 
 ### Create the env files
 
@@ -71,7 +79,8 @@ Then fill in these values:
 - `NEXT_PUBLIC_SUPABASE_ANON_KEY` and `SUPABASE_JWT_SECRET`: shown by `supabase status` as
   `ANON_KEY` and `JWT_SECRET`.
 - `CAL_API_KEY`: optional, needed for real bookings.
-- `LEAD_WEBHOOK_SECRET`: any random string, used by external lead forms.
+- `LEAD_WEBHOOK_SECRET`: 24+ random characters (`openssl rand -hex 24`), used by external lead
+  forms. Placeholders like `change-me` are treated as unset, so the webhook stays disabled.
 
 Leave the AWS key lines commented out to use your AWS CLI profile.
 
@@ -131,8 +140,10 @@ second line of [supabase/seed.sql](supabase/seed.sql). They only exist in your l
 2. **Watch the board update.** When the agent books a slot, the card moves to
    **Appointment Booked** without a page refresh. When you hang up, post-call analysis writes the
    summary, sentiment and transcript. Click any card to see them.
-3. **Add a lead.** Click **+ New Lead / Dial**. With `TELEPHONY_PROVIDER="webrtc_only"` the card is
-   created but no phone call is placed; use the browser simulator to call instead.
+3. **Add a lead.** Click **+ New Lead / Dial**. Tick **The lead agreed to be called** when they did:
+   the agent never dials a real number without recorded consent. With
+   `TELEPHONY_PROVIDER="webrtc_only"` the card is created but no phone call is placed; use the browser
+   simulator to call instead.
 4. **Tune the agent.** Open **Agent Studio** (`/settings`) to edit the greetings, Nova Sonic voice,
    qualification questions, objection handlers, Cal.com event type ID, transfer number and
    redial hours. New calls use the changes immediately.
@@ -168,8 +179,12 @@ shows the steps each call went through, for example Qualify › Schedule › Boo
 ```bash
 curl -X POST http://localhost:8000/api/leads \
   -H "Content-Type: application/json" -H "X-Webhook-Secret: $LEAD_WEBHOOK_SECRET" \
-  -d '{"phone":"+17135550199","full_name":"Jane Doe","email":"jane@example.com","trigger_call_immediately":true}'
+  -d '{"phone":"+17135550199","full_name":"Jane Doe","email":"jane@example.com","trigger_call_immediately":true,"consent":true,"consent_source":"website form, TCPA checkbox"}'
 ```
+
+If the dial is blocked (no consent, outside calling hours, a dial limit, or a country outside the
+allowlist), the response says why in `blocked_reason`. Temporary blocks are queued and retried
+automatically at `next_attempt_at`.
 
 ---
 
@@ -189,8 +204,17 @@ curl -X POST http://localhost:8000/api/leads \
    Then restart the engine.
 3. In the Twilio console, set your number's **"A call comes in"** webhook to
    `POST https://<tunnel>/api/calls/inbound`.
-4. Outbound calls now dial for real. Unanswered calls and voicemails are retried automatically, up
-   to 3 times and 4 hours apart, only during the business hours set in Agent Studio.
+4. Outbound calls now dial for real, but only when all of these hold:
+   - the number is in `ALLOWED_DIAL_COUNTRY_CODES` (US and Canada by default);
+   - the contact has consent on record;
+   - it's within the business hours set in Agent Studio;
+   - the number hasn't been dialed 3 times in the past 24 hours, and fewer than 30 dials have gone
+     out in the past hour.
+
+   Unanswered calls and voicemails are retried automatically, up to 3 times and 4 hours apart. Also
+   restrict Twilio's own **Voice Geographic Permissions** to the same countries.
+5. Recording is off by default. If you turn it on in Agent Studio, the agent reads the recording
+   notice right after its opening line. Check the consent rules where you and your callers are.
 
 Twilio webhooks are signature-checked, so the tunnel URL must exactly match
 `PUBLIC_VOICE_WEBHOOK_BASE_URL`.
@@ -213,7 +237,22 @@ npm --prefix apps/web run typecheck && npm --prefix apps/web run lint && npm --p
 
 ---
 
-## 7. Docker (optional)
+## 7. Before exposing it beyond your machine
+
+- Set `APP_ENV="production"`. The voice engine then refuses to start with known default secrets,
+  default database credentials, disabled Twilio signature checks, or a non-https webhook URL.
+- Use a hosted Supabase project with its own JWT secret and keys. **Never run `supabase/seed.sql`
+  against it**: it contains a known admin password.
+- Create your admin user and grant the role (SQL above). Keep sign-up off.
+- Generate a real `LEAD_WEBHOOK_SECRET`, and serve everything over HTTPS.
+- Behind a reverse proxy, run uvicorn with `--proxy-headers --forwarded-allow-ips=<proxy ip>` so rate
+  limits see real client IPs.
+- Review `ALLOWED_DIAL_COUNTRY_CODES`, the dial limits and consent capture with whoever owns
+  compliance.
+
+---
+
+## 8. Docker (optional)
 
 `docker-compose.yml` runs the engine and dashboard in containers. The database still comes from
 `supabase start`, and your `~/.aws` folder is mounted read-only for Bedrock credentials.
@@ -234,4 +273,8 @@ docker compose up --build
 | Calendar tool says it's unavailable | Set `CAL_API_KEY` in `.env` and a real Cal.com event type ID in Agent Studio. |
 | "Microphone blocked" in the simulator | Allow microphone access for `localhost:3000` in your browser settings, or open the dashboard in regular Chrome or Safari. |
 | Agent keeps asking for the email | The booking tool rejects incomplete addresses (for example a missing "at"). Spell it out clearly, including the part after the at sign. |
-| Reset all local data | `supabase db reset` re-applies the migration and seed. |
+| Login says "This account doesn't have admin access" | Grant the role with the SQL in [First-time setup](#2-first-time-setup), then sign in again. |
+| Voice engine refuses to start: "Refusing to start in production" | Fix each listed setting, or use `APP_ENV="development"` on your own machine. |
+| "Lead created but not dialed" | The toast gives the reason: consent, calling hours, a dial limit or the country allowlist. Queued dials retry on their own. |
+| Browser call fails with "too many browser calls in progress" | Hang up an open simulator call (limit `MAX_CONCURRENT_BROWSER_CALLS`). |
+| Reset all local data | `supabase db reset` re-applies the migrations and seed. |

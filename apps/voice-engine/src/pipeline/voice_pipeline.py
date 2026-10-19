@@ -77,8 +77,10 @@ class VoiceSession:
         upcoming = await db.upcoming_appointments(self.call.contact_id) if self.call.direction == "inbound" else []
 
         self.rt = ToolRuntime(call=self.call, config=config, contact=contact)
+        recorded = bool(config.get("record_calls")) and self.call.transport == "twilio" and self.call.direction == "outbound"
         system_instruction = prompts.compile_system_instruction(
-            config=config, contact=contact, direction=self.call.direction, upcoming_appointments=upcoming
+            config=config, contact=contact, direction=self.call.direction, upcoming_appointments=upcoming,
+            recorded=recorded,
         )
         llm = build_llm(system_instruction, config["nova_voice_id"], self.rt)
         self.context = LLMContext()

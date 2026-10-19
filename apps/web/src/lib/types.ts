@@ -35,6 +35,8 @@ export interface Contact {
   custom_fields: Record<string, unknown> | null;
   last_contacted_at: string | null;
   next_follow_up_at: string | null;
+  consent_at: string | null;
+  consent_source: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -86,6 +88,8 @@ export interface AgentConfig {
   timezone: string;
   business_hours_start: number;
   business_hours_end: number;
+  record_calls: boolean;
+  recording_disclosure: string;
   updated_at: string;
 }
 

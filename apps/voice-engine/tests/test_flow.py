@@ -18,6 +18,7 @@ from .conftest import TEST_PHONE_PREFIX
 
 CAL = get_settings().cal_api_base_url
 QUESTIONS = ["What is your primary goal?", "What timeline are you working with?"]
+SOON = (datetime.now(timezone.utc) + timedelta(days=3)).replace(microsecond=0)
 
 
 @pytest.fixture
@@ -125,18 +126,20 @@ async def test_unoffered_slot_cannot_be_booked(rt):
 
 async def test_callback_requires_future_offset_time(rt):
     bad = await call(rt, "schedule_callback")(callback_iso="tomorrow at 3")
-    naive = await call(rt, "schedule_callback")(callback_iso="2099-01-06T15:00:00")
+    naive = await call(rt, "schedule_callback")(callback_iso=SOON.replace(tzinfo=None).isoformat())
+    far = await call(rt, "schedule_callback")(callback_iso="2099-01-06T15:00:00-06:00")
     assert bad["success"] is False and naive["success"] is False and rt.flow.stage == Stage.QUALIFY
+    assert far["success"] is False and "60 days" in far["error"]
 
-    ok = await call(rt, "schedule_callback")(callback_iso="2099-01-06T15:00:00-06:00", reason="driving")
-    assert ok["success"] and ok["stage"] == "callback" and rt.flow.callback_at.isoformat() == "2099-01-06T15:00:00-06:00"
+    ok = await call(rt, "schedule_callback")(callback_iso=SOON.isoformat(), reason="driving")
+    assert ok["success"] and ok["stage"] == "callback" and rt.flow.callback_at == SOON
 
 
 @respx.mock
 async def test_changing_mind_after_callback_clears_it(rt):
     respx.get(f"{CAL}/slots").mock(return_value=httpx.Response(200, json=slots_payload()))
-    await call(rt, "schedule_callback")(callback_iso="2099-01-06T15:00:00-06:00")
-    out = await call(rt, "check_calendar_availability")(date_str="2099-01-05")
+    await call(rt, "schedule_callback")(callback_iso=SOON.isoformat())
+    out = await call(rt, "check_calendar_availability")(date_str=SOON.date().isoformat())
     assert out["stage"] == "schedule" and rt.flow.callback_at is None
 
 

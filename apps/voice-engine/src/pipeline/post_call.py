@@ -7,6 +7,7 @@ from loguru import logger
 
 from src import db
 from src.pipeline.flow import FlowState
+from src.pipeline.sanitize import clean_fields
 from src.schemas import CallContext, PostCallExtraction
 from src.services import llm
 
@@ -119,6 +120,8 @@ async def run_post_call(
     extraction = forced_outcome or await analyse(
         transcript, started_at=started_at, tz=tz, booked=booked, transferred=transferred, flow=flow
     )
+    # Extracted facts come from caller speech: clean them before they are stored and later re-used in prompts.
+    extraction.extracted_custom_fields = clean_fields(extraction.extracted_custom_fields)
     extracted_data = extraction.model_dump()
     if flow is not None:
         extracted_data["flow"] = flow.summary()

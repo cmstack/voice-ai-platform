@@ -1,4 +1,5 @@
--- Local development seed. These credentials exist only in the local Supabase stack.
+-- Local development seed ONLY. Never run this against a hosted database (it contains a known password).
+-- These credentials exist only in the local Supabase stack.
 -- Dashboard login: admin@voice.test / dev-bbef31a0b328
 INSERT INTO auth.users (
     instance_id, id, aud, role, email, encrypted_password, email_confirmed_at,
@@ -7,7 +8,7 @@ INSERT INTO auth.users (
 ) VALUES (
     '00000000-0000-0000-0000-000000000000', '11111111-1111-1111-1111-111111111111',
     'authenticated', 'authenticated', 'admin@voice.test', crypt('dev-bbef31a0b328', gen_salt('bf')), NOW(),
-    '{"provider":"email","providers":["email"]}', '{}', NOW(), NOW(), '', '', '', ''
+    '{"provider":"email","providers":["email"],"role":"admin"}', '{}', NOW(), NOW(), '', '', '', ''
 );
 
 INSERT INTO auth.identities (

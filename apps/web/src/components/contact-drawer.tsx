@@ -212,6 +212,14 @@ function DetailsForm({ contact }: { contact: Contact }) {
       <Field label="Full name"><Input value={fullName} onChange={(e) => setFullName(e.target.value)} /></Field>
       <Field label="Email"><Input type="email" value={email} onChange={(e) => setEmail(e.target.value)} /></Field>
       <Field label="Phone"><Input value={phone} onChange={(e) => setPhone(e.target.value)} /></Field>
+      <div className="rounded-lg bg-muted px-3 py-2 text-xs text-muted-foreground">
+        {contact.consent_at ? (
+          <>Call consent recorded {format(new Date(contact.consent_at), "MMM d, yyyy h:mm a")}
+            {contact.consent_source && <> ({contact.consent_source})</>}.</>
+        ) : (
+          <>No call consent on record. The agent won&apos;t dial this number until consent is captured.</>
+        )}
+      </div>
       <Field label="Stage">
         <Select value={stage} onValueChange={(v) => setStage(v as PipelineStage)}>
           <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>

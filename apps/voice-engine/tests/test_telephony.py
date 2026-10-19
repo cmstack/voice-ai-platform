@@ -106,23 +106,63 @@ async def test_status_callback_records_duration_and_no_answer(pool):
     assert await pool.fetchval("SELECT stage::text FROM contacts WHERE id = $1", c["id"]) == "no_answer_retry"
 
 
-def test_ws_rejects_unknown_call(monkeypatch):
+def _ws_start_messages(call_log_id="00000000-0000-0000-0000-000000000000"):
+    return [
+        {"event": "connected", "protocol": "Call", "version": "1.0.0"},
+        {"event": "start", "start": {"streamSid": "MZ1", "callSid": "CA9", "accountSid": "AC1",
+                                    "customParameters": {"contact_id": "00000000-0000-0000-0000-000000000000",
+                                                         "call_log_id": call_log_id}}},
+    ]
+
+
+def ws_app():
+    from fastapi import FastAPI
+    app = FastAPI(); app.include_router(calls.router)
+    return app
+
+
+def test_ws_rejects_missing_signature():
+    from fastapi.testclient import TestClient
+    from starlette.websockets import WebSocketDisconnect
+
+    with TestClient(ws_app()) as tc, pytest.raises(WebSocketDisconnect) as exc:
+        with tc.websocket_connect("/ws/voice"):
+            pass
+    assert exc.value.code == 1008
+
+
+def test_ws_rejects_bad_signature():
+    from fastapi.testclient import TestClient
+    from starlette.websockets import WebSocketDisconnect
+
+    with TestClient(ws_app()) as tc, pytest.raises(WebSocketDisconnect):
+        with tc.websocket_connect("/ws/voice", headers={"X-Twilio-Signature": "forged"}):
+            pass
+
+
+def test_ws_signature_accepts_twilio_signed_url():
+    url = get_settings().public_ws_url
+    sig = RequestValidator(TOKEN).compute_signature(url, {})
+    assert url == "wss://voice.example.test/ws/voice"
+    assert telephony.is_valid_ws_signature(sig)
+    https_sig = RequestValidator(TOKEN).compute_signature("https://voice.example.test/ws/voice", {})
+    assert telephony.is_valid_ws_signature(https_sig)
+    assert not telephony.is_valid_ws_signature(RequestValidator("other-token").compute_signature(url, {}))
+
+
+def test_ws_rejects_unknown_call_even_when_signed(monkeypatch):
     # TestClient runs the app on its own event loop, so stub the lookup instead of sharing the pool.
     async def no_such_call(_id):
         return None
 
     monkeypatch.setattr(calls.db, "get_call_log", no_such_call)
     from fastapi.testclient import TestClient
-    from fastapi import FastAPI
     from starlette.websockets import WebSocketDisconnect
 
-    app = FastAPI(); app.include_router(calls.router)
-    start = {"event": "start", "start": {"streamSid": "MZ1", "callSid": "CA9", "accountSid": "AC1",
-             "customParameters": {"contact_id": "00000000-0000-0000-0000-000000000000",
-                                  "call_log_id": "00000000-0000-0000-0000-000000000000"}}}
-    with TestClient(app) as tc, tc.websocket_connect("/ws/voice") as ws:
-        ws.send_json({"event": "connected", "protocol": "Call", "version": "1.0.0"})
-        ws.send_json(start)
+    sig = RequestValidator(TOKEN).compute_signature(get_settings().public_ws_url, {})
+    with TestClient(ws_app()) as tc, tc.websocket_connect("/ws/voice", headers={"X-Twilio-Signature": sig}) as ws:
+        for m in _ws_start_messages():
+            ws.send_json(m)
         with pytest.raises(WebSocketDisconnect) as exc:
             ws.receive_text()
     assert exc.value.code == 1008

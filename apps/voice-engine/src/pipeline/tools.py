@@ -8,7 +8,7 @@ import asyncio
 import re
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from typing import Any
 
 from loguru import logger
@@ -16,7 +16,9 @@ from pipecat.adapters.schemas.function_schema import FunctionSchema
 from pipecat.services.llm_service import FunctionCallParams
 
 from src import db
+from src.config import get_settings
 from src.pipeline.flow import END_REASONS, FlowState, Stage, answer_key, parse_future
+from src.pipeline.sanitize import clean_name, clean_text
 from src.schemas import CallContext
 from src.services import calendar, telephony
 
@@ -33,6 +35,8 @@ class ToolRuntime:
     contact: dict[str, Any]
     flow: FlowState = field(init=False)
     offered_slots: dict[str, datetime] = field(default_factory=dict)
+    availability_checks: int = 0
+    callbacks_scheduled: int = 0
     booked: bool = False
     transferred: bool = False
     hangup: Callable[[], Awaitable[None]] | None = None
@@ -56,7 +60,7 @@ class ToolRuntime:
 
 async def save_qualification(rt: ToolRuntime, ready_to_book: bool = False, **answers: str) -> dict:
     known = {answer_key(q) for q in rt.flow.questions}
-    saved = {k: str(v).strip() for k, v in answers.items() if k in known and str(v).strip()}
+    saved = {k: clean_text(v) for k, v in answers.items() if k in known and clean_text(v)}
     rt.flow.answers.update(saved)
     if ready_to_book:
         rt.flow.enter(Stage.SCHEDULE)
@@ -73,6 +77,9 @@ async def check_calendar_availability(rt: ToolRuntime, date_str: str, timezone: 
         day = date.fromisoformat(date_str[:10])
     except ValueError:
         return {"error": "date_str must be YYYY-MM-DD"}
+    if rt.availability_checks >= get_settings().max_availability_checks_per_call:
+        return {"error": "Too many calendar lookups on this call. Offer to schedule a callback instead."}
+    rt.availability_checks += 1
     if rt.flow.stage == Stage.CALLBACK:  # caller changed their mind and wants to book after all
         rt.flow.callback_at = None
     rt.flow.enter(Stage.SCHEDULE)
@@ -108,12 +115,23 @@ def _offered(rt: ToolRuntime, slot_iso: str) -> datetime | None:
 async def book_calendar_appointment(
     rt: ToolRuntime, slot_iso: str, attendee_name: str, attendee_email: str, notes: str = ""
 ) -> dict:
-    attendee_email = attendee_email.strip().replace(" ", "")
+    attendee_email = clean_text(attendee_email, 254).replace(" ", "")
+    attendee_name = clean_name(attendee_name) or ""
+    notes = clean_text(notes, 500) if notes else ""
+    if not attendee_name:
+        return {"success": False, "error": "Ask the caller for their full name before booking."}
     if not EMAIL.match(attendee_email):
         return {
             "success": False,
             "error": f"'{attendee_email}' is not a complete email address. Ask the caller to spell it letter by letter, "
                      "including the part after the at sign, then try again.",
+        }
+    upcoming = await db.count_upcoming_appointments(rt.call.contact_id)
+    if upcoming >= get_settings().max_upcoming_appointments_per_contact:
+        return {
+            "success": False,
+            "error": "This caller already has an upcoming appointment. Don't book another. Offer to transfer them "
+                     "to a specialist if they want to change it.",
         }
     start = _offered(rt, slot_iso)
     if start is None:
@@ -153,15 +171,22 @@ async def book_calendar_appointment(
 
 
 async def schedule_callback(rt: ToolRuntime, callback_iso: str, reason: str = "") -> dict:
+    if rt.callbacks_scheduled >= get_settings().max_callbacks_per_call:
+        return {"success": False, "error": "A callback is already set for this call. Confirm it and wrap up."}
     when = parse_future(callback_iso)
+    if when is not None and when > datetime.now(when.tzinfo) + timedelta(days=60):
+        return {"success": False, "error": "Callbacks can be scheduled at most 60 days ahead. Ask for an earlier time."}
     if when is None:
         return {
             "success": False,
             "error": "callback_iso must be a future ISO 8601 time with a UTC offset, e.g. 2026-10-20T15:00:00-05:00.",
         }
+    rt.callbacks_scheduled += 1
     rt.flow.callback_at = when
-    rt.flow.callback_reason = reason or None
+    rt.flow.callback_reason = clean_text(reason) or None
     rt.flow.enter(Stage.CALLBACK)
+    # The caller asked to be called back: record that as consent to dial this number.
+    await db.record_consent(rt.call.contact_id, f"callback requested by caller on call {rt.call.call_log_id}")
     return {"success": True, "callback": calendar.Slot(when).spoken(rt.config["timezone"])}
 
 

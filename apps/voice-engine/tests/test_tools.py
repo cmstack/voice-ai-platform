@@ -76,6 +76,7 @@ async def test_booking_failure_writes_nothing(rt, pool):
 
 @respx.mock
 async def test_db_failure_rolls_back_both_writes(rt, pool, monkeypatch):
+    monkeypatch.setattr(get_settings(), "max_upcoming_appointments_per_contact", 5)
     slot = future_slots(1)[0]["start"]
     offer(rt, slot)
     respx.post(f"{CAL}/bookings").mock(return_value=httpx.Response(201, json={"data": {"uid": "bk_dup", "start": slot}}))

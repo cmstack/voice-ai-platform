@@ -17,6 +17,7 @@ export function NewLeadDialog() {
   const [email, setEmail] = useState("");
   const [interest, setInterest] = useState("");
   const [dial, setDial] = useState(true);
+  const [consent, setConsent] = useState(false);
   const [busy, setBusy] = useState(false);
 
   async function submit(e: React.FormEvent) {
@@ -31,17 +32,24 @@ export function NewLeadDialog() {
           email: email || null,
           custom_fields: interest ? { interest } : {},
           trigger_call_immediately: dial,
+          consent,
+          consent_source: consent ? "confirmed by operator in dashboard" : null,
         }),
       });
       const body = await res.json();
       if (!res.ok) throw new Error(typeof body.detail === "string" ? body.detail : JSON.stringify(body.detail));
-      toast.success(
-        body.dialed ? "Lead created. Dialing now…"
-          : dial ? "Lead created. Telephony is off, so use the browser simulator to call."
-          : "Lead created",
-      );
+      if (body.blocked_reason) {
+        const when = body.next_attempt_at ? ` Next attempt: ${new Date(body.next_attempt_at).toLocaleString()}.` : "";
+        toast.warning(`Lead created but not dialed: ${body.blocked_reason}.${when}`);
+      } else {
+        toast.success(
+          body.dialed ? "Lead created. Dialing now…"
+            : dial ? "Lead created. Telephony is off, so use the browser simulator to call."
+            : "Lead created",
+        );
+      }
       setOpen(false);
-      setPhone(""); setFullName(""); setEmail(""); setInterest("");
+      setPhone(""); setFullName(""); setEmail(""); setInterest(""); setConsent(false);
     } catch (err) {
       toast.error((err as Error).message);
     } finally {
@@ -83,6 +91,21 @@ export function NewLeadDialog() {
               <span className="text-xs text-muted-foreground">The agent dials within seconds (speed-to-lead).</span>
             </span>
             <Switch checked={dial} onCheckedChange={setDial} />
+          </label>
+          <label className="flex items-start gap-3 text-sm">
+            <input
+              type="checkbox"
+              className="mt-0.5 size-4 accent-[var(--brand)]"
+              checked={consent}
+              onChange={(e) => setConsent(e.target.checked)}
+              aria-describedby="lead-consent-help"
+            />
+            <span className="flex flex-col gap-0.5">
+              <span className="font-semibold">The lead agreed to be called</span>
+              <span id="lead-consent-help" className="text-xs text-muted-foreground">
+                Required before the agent will dial a real phone number. It is saved with the contact.
+              </span>
+            </span>
           </label>
           <DialogFooter>
             <Button type="submit" variant={dial ? "brand" : "default"} disabled={busy}>{busy ? "Saving…" : dial ? "Create & dial" : "Create lead"}</Button>

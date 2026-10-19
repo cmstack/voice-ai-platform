@@ -27,15 +27,26 @@ async def clean_test_contacts(pool):
     yield
 
 
+def make_token(app_role: str | None = "admin", **extra) -> str:
+    claims = {"sub": "11111111-1111-1111-1111-111111111111", "role": "authenticated",
+              "aud": "authenticated", "exp": int(time.time()) + 600, **extra}
+    if app_role is not None:
+        claims["app_metadata"] = {"provider": "email", "role": app_role}
+    return jwt.encode(claims, get_settings().supabase_jwt_secret, algorithm="HS256")
+
+
 @pytest.fixture
 def auth_headers() -> dict[str, str]:
-    token = jwt.encode(
-        {"sub": "11111111-1111-1111-1111-111111111111", "role": "authenticated",
-         "aud": "authenticated", "exp": int(time.time()) + 600},
-        get_settings().supabase_jwt_secret,
-        algorithm="HS256",
-    )
-    return {"Authorization": f"Bearer {token}"}
+    return {"Authorization": f"Bearer {make_token()}"}
+
+
+@pytest.fixture(autouse=True)
+def reset_rate_limits():
+    from src.services.rate_limit import browser_calls, limiter
+
+    limiter.reset()
+    browser_calls.active = 0
+    yield
 
 
 def make_client(*routers) -> httpx.AsyncClient:

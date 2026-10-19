@@ -1,4 +1,5 @@
 import re
+from datetime import datetime
 from typing import Any, Literal
 from uuid import UUID
 
@@ -23,6 +24,16 @@ class LeadIn(BaseModel):
     email: EmailStr | None = None
     custom_fields: dict[str, Any] = Field(default_factory=dict)
     trigger_call_immediately: bool = False
+    # Prior express consent to be called. Required before the system will auto-dial this number.
+    consent: bool = False
+    consent_source: str | None = Field(default=None, max_length=200, description="Where consent was given, e.g. 'website form v3'")
+
+    @field_validator("custom_fields")
+    @classmethod
+    def _small_custom_fields(cls, v: dict[str, Any]) -> dict[str, Any]:
+        if len(v) > 30 or any(len(str(k)) > 60 or len(str(val)) > 500 for k, val in v.items()):
+            raise ValueError("custom_fields: at most 30 entries, keys up to 60 chars, values up to 500 chars")
+        return v
 
     @field_validator("phone")
     @classmethod
@@ -35,6 +46,8 @@ class LeadOut(BaseModel):
     stage: str
     call_log_id: UUID | None = None
     dialed: bool = False
+    blocked_reason: str | None = None
+    next_attempt_at: datetime | None = None
 
 
 class _PostCallBase(BaseModel):

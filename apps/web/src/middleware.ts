@@ -22,6 +22,16 @@ export async function middleware(request: NextRequest) {
     data: { user },
   } = await supabase.auth.getUser();
   const isLogin = request.nextUrl.pathname.startsWith("/login");
+  // Same rule as public.is_admin() in the database and the voice engine's auth guard.
+  const isAdmin = user?.app_metadata?.role === "admin";
+  if (user && !isAdmin) {
+    await supabase.auth.signOut();
+    const url = new URL("/login", request.url);
+    url.searchParams.set("error", "not_admin");
+    const redirect = NextResponse.redirect(url);
+    response.cookies.getAll().forEach((c) => redirect.cookies.set(c));
+    return redirect;
+  }
   if (!user && !isLogin) {
     return NextResponse.redirect(new URL("/login", request.url));
   }

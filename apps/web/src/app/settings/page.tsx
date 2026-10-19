@@ -9,6 +9,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { supabase } from "@/lib/supabase";
 import { NOVA_VOICES, type AgentConfig } from "@/lib/types";
@@ -68,6 +69,8 @@ export default function SettingsPage() {
         timezone: draft.timezone,
         business_hours_start: Number(draft.business_hours_start),
         business_hours_end: Number(draft.business_hours_end),
+        record_calls: draft.record_calls,
+        recording_disclosure: draft.recording_disclosure.trim() || "This call may be recorded.",
       })
       .eq("id", 1);
     setSaving(false);
@@ -189,6 +192,26 @@ export default function SettingsPage() {
                 <Input type="number" min={1} max={24} value={draft.business_hours_end} onChange={(e) => set("business_hours_end", Number(e.target.value))} />
               </Field>
             </div>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle className="font-semibold">Call recording</CardTitle>
+            <CardDescription>
+              Off by default. Many places require every party to consent before a call is recorded, so when this is
+              on the agent reads the notice below right after its opening line.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <label className="flex items-center justify-between gap-4 rounded-lg border border-border p-3 text-sm">
+              <span className="font-semibold">Record outbound phone calls</span>
+              <Switch checked={draft.record_calls} onCheckedChange={(v) => set("record_calls", v)} />
+            </label>
+            <Field label="Recording notice">
+              <Textarea rows={2} value={draft.recording_disclosure} disabled={!draft.record_calls}
+                onChange={(e) => set("recording_disclosure", e.target.value)} />
+            </Field>
           </CardContent>
         </Card>
 

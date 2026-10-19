@@ -11,6 +11,7 @@ from twilio.rest import Client
 from twilio.twiml.voice_response import Connect, Dial, VoiceResponse
 
 from src import db
+from src.services import dial_guard
 from src.config import get_settings
 
 
@@ -52,32 +53,53 @@ def hangup_twiml() -> str:
     return str(response)
 
 
+def mask_phone(phone: str) -> str:
+    """Keep logs useful without writing full phone numbers (PII) to them."""
+    return phone[:-4].translate(str.maketrans("0123456789", "**********")) + phone[-4:] if len(phone) > 4 else "****"
+
+
 async def initiate_outbound_call(contact_id: UUID, call_log_id: UUID, phone: str) -> str | None:
-    """Place the call; Twilio fetches /api/calls/outbound-xml once answered. Returns CallSid."""
+    """Place the call; Twilio fetches /api/calls/outbound-xml once answered. Returns CallSid.
+
+    Every real dial passes `dial_guard.check` first and raises DialBlocked when policy forbids it.
+    """
     if not telephony_enabled():
-        logger.info(f"TELEPHONY_PROVIDER=webrtc_only; not dialing {phone} (call_log {call_log_id})")
+        logger.info(f"TELEPHONY_PROVIDER=webrtc_only; not dialing {mask_phone(phone)} (call_log {call_log_id})")
         return None
+    contact = await db.get_contact(contact_id)
+    config = await db.get_agent_config()
+    if contact is None:
+        raise dial_guard.DialBlocked("contact no longer exists")
+    await dial_guard.check(contact, config)
+
     s = get_settings()
     ids = {"contact_id": str(contact_id), "call_log_id": str(call_log_id)}
+    recording = (
+        {
+            "record": True,
+            "recording_status_callback": _webhook("/api/calls/status", **ids),
+            "recording_status_callback_event": ["completed"],
+        }
+        if config.get("record_calls")
+        else {}
+    )
 
     def _create() -> str:
         call = _client().calls.create(
-            to=phone,
+            to=contact["phone"],
             from_=s.twilio_phone_number,
             url=_webhook("/api/calls/outbound-xml", **ids),
             method="POST",
             machine_detection="DetectMessageEnd",
-            record=True,
-            recording_status_callback=_webhook("/api/calls/status", **ids),
-            recording_status_callback_event=["completed"],
             status_callback=_webhook("/api/calls/status", **ids),
             status_callback_event=["completed"],
+            **recording,
         )
         return call.sid
 
     sid = await asyncio.to_thread(_create)
     await db.set_provider_call_id(call_log_id, sid)
-    logger.info(f"Dialing {phone}: CallSid={sid}")
+    logger.info(f"Dialing {mask_phone(contact['phone'])}: CallSid={sid}")
     return sid
 
 
@@ -90,6 +112,25 @@ async def bridge_call(provider_call_id: str, human_phone: str) -> None:
     response.append(dial)
     twiml = str(response)
     await asyncio.to_thread(lambda: _client().calls(provider_call_id).update(twiml=twiml))
+
+
+def is_valid_ws_signature(signature: str | None) -> bool:
+    """Validate X-Twilio-Signature on the Media Streams WebSocket handshake.
+
+    Twilio signs the stream URL it was given in our TwiML (`public_ws_url`) with no POST params.
+    Set VALIDATE_TWILIO_WS_SIGNATURE=false only to debug a proxy that rewrites the URL.
+    """
+    s = get_settings()
+    if not (s.validate_twilio_signature and s.validate_twilio_ws_signature):
+        return True
+    if not (signature and s.twilio_auth_token):
+        return False
+    validator = RequestValidator(s.twilio_auth_token)
+    url = s.public_ws_url
+    # Twilio's docs require validating this header but don't spell out the scheme of the signed
+    # URL, so accept the wss:// form we sent and its https:// equivalent.
+    https_url = url.replace("wss://", "https://", 1).replace("ws://", "http://", 1)
+    return validator.validate(url, {}, signature) or validator.validate(https_url, {}, signature)
 
 
 def is_valid_signature(url: str, params: dict[str, str], signature: str | None) -> bool:
