@@ -12,6 +12,7 @@ from zoneinfo import ZoneInfo
 
 from src import db
 from src.config import get_settings
+from src.services.rate_limit import all_calls
 
 
 @dataclass
@@ -63,6 +64,8 @@ async def check(contact: dict[str, Any], config: dict[str, Any], now: datetime |
         raise DialBlocked(
             f"already dialed {per_number} times in 24 hours", retry_at=now + timedelta(hours=24)
         )
+    if not all_calls.has_capacity():
+        raise DialBlocked("too many calls in progress", retry_at=now + timedelta(minutes=5))
     total = await db.count_dials(since=now - timedelta(hours=1))
     if total >= s.max_dials_per_hour:
         raise DialBlocked("hourly dialing limit reached", retry_at=now + timedelta(minutes=15))

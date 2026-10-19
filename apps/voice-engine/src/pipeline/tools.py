@@ -8,7 +8,7 @@ import asyncio
 import re
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 from loguru import logger
@@ -20,7 +20,7 @@ from src.config import get_settings
 from src.pipeline.flow import END_REASONS, FlowState, Stage, answer_key, parse_future
 from src.pipeline.sanitize import clean_name, clean_text
 from src.schemas import CallContext
-from src.services import calendar, telephony
+from src.services import calendar, dial_guard, telephony
 
 TRANSFER_LINE = "Hold on just a second while I connect you with a specialist."
 TRANSFER_SPEECH_DELAY_SECS = 4.0
@@ -126,6 +126,10 @@ async def book_calendar_appointment(
             "error": f"'{attendee_email}' is not a complete email address. Ask the caller to spell it letter by letter, "
                      "including the part after the at sign, then try again.",
         }
+    recent = await db.count_bookings_since(datetime.now(timezone.utc) - timedelta(hours=1))
+    if recent >= get_settings().max_bookings_per_hour:
+        logger.warning("Booking refused: hourly booking limit reached")
+        return {"success": False, "error": "Booking is unavailable right now. Offer to schedule a callback instead."}
     upcoming = await db.count_upcoming_appointments(rt.call.contact_id)
     if upcoming >= get_settings().max_upcoming_appointments_per_contact:
         return {
@@ -194,6 +198,9 @@ async def transfer_to_human(rt: ToolRuntime, reason: str) -> dict:
     phone = rt.config.get("human_transfer_phone")
     if not phone:
         return {"success": False, "message": "No specialist line is configured. Offer a callback instead."}
+    if not dial_guard.country_allowed(phone, get_settings().allowed_dial_country_codes):
+        logger.warning("Transfer refused: transfer number is outside the allowed calling countries")
+        return {"success": False, "message": "Transfers are unavailable right now. Offer a callback instead."}
 
     await db.set_stage(rt.call.contact_id, "transferred_to_human")
     rt.transferred = True

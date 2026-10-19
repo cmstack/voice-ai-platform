@@ -42,10 +42,13 @@ def auth_headers() -> dict[str, str]:
 
 @pytest.fixture(autouse=True)
 def reset_rate_limits():
-    from src.services.rate_limit import browser_calls, limiter
+    from src.services import auth
+    from src.services.rate_limit import all_calls, browser_calls, limiter
 
     limiter.reset()
     browser_calls.active = 0
+    all_calls.active = 0
+    auth._role_cache.clear()
     yield
 
 

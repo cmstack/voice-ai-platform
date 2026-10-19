@@ -43,6 +43,16 @@ def _row(record: asyncpg.Record | None) -> dict[str, Any] | None:
     return dict(record) if record is not None else None
 
 
+# --- auth -------------------------------------------------------------------
+
+
+async def user_role(user_id: UUID) -> str | None:
+    """The user's CURRENT app_metadata.role from auth.users (None if the user is gone)."""
+    return await pool().fetchval(
+        "SELECT raw_app_meta_data ->> 'role' FROM auth.users WHERE id = $1 AND deleted_at IS NULL", user_id
+    )
+
+
 # --- agent_config -----------------------------------------------------------
 
 
@@ -124,6 +134,10 @@ async def count_dials(*, since: datetime, contact_id: UUID | None = None) -> int
 
 async def delete_call_log(call_log_id: UUID) -> None:
     await pool().execute("DELETE FROM call_logs WHERE id = $1 AND outcome IS NULL", call_log_id)
+
+
+async def count_bookings_since(since: datetime) -> int:
+    return await pool().fetchval("SELECT count(*) FROM appointments WHERE created_at >= $1", since)
 
 
 async def count_upcoming_appointments(contact_id: UUID) -> int:
@@ -378,3 +392,26 @@ async def claim_due_follow_ups(limit: int = 5) -> list[tuple[dict[str, Any], UUI
             )
             claimed.append((dict(row), call_log_id))
     return claimed
+
+
+# --- retention ----------------------------------------------------------------
+
+
+async def purge_call_content(cutoff: datetime) -> list[tuple[UUID, str | None]]:
+    """Clear transcript, recording and extracted details of calls created before `cutoff`."""
+    rows = await pool().fetch(
+        """
+        WITH old AS (
+            SELECT id, recording_url FROM call_logs
+            WHERE created_at < $1
+              AND (transcript <> '[]'::jsonb OR recording_url IS NOT NULL OR extracted_data <> '{}'::jsonb)
+            FOR UPDATE
+        )
+        UPDATE call_logs c
+        SET transcript = '[]'::jsonb, recording_url = NULL, extracted_data = '{}'::jsonb
+        FROM old WHERE c.id = old.id
+        RETURNING c.id, old.recording_url
+        """,
+        cutoff,
+    )
+    return [(r["id"], r["recording_url"]) for r in rows]

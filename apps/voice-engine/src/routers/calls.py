@@ -27,7 +27,7 @@ from src.pipeline.voice_pipeline import VoiceSession
 from src.schemas import CallContext, normalize_phone
 from src.services import telephony
 from src.services.auth import require_user
-from src.services.rate_limit import browser_calls, limit
+from src.services.rate_limit import all_calls, browser_calls, limit
 
 router = APIRouter(tags=["calls"])
 
@@ -36,6 +36,7 @@ WEBRTC_TEST_OUTBOUND_PHONE = "+15550002000"
 FAILED_CALL_STATUSES = {"no-answer", "busy", "failed", "canceled"}
 
 _sessions: set[asyncio.Task] = set()
+_live_streams: set[UUID] = set()  # call_log ids with a media stream open right now
 
 
 def _spawn(coro) -> None:
@@ -64,7 +65,15 @@ async def twilio_form(request: Request) -> dict[str, str]:
 
 @router.post("/api/calls/inbound")
 async def inbound_call(form: dict = Depends(twilio_form)) -> Response:
-    phone = normalize_phone(form.get("From", ""))
+    if not all_calls.has_capacity():
+        logger.warning("Inbound call refused: concurrent call limit reached")
+        return _twiml(telephony.busy_twiml())
+    try:
+        phone = normalize_phone(form.get("From", ""))
+    except ValueError:
+        # Withheld / "Anonymous" caller ID: give the caller a contact of their own, keyed to this call.
+        # It never passes the dial guard's country check, so the system will never dial it.
+        phone = "anon:" + (form.get("CallSid") or "unknown")[-14:]
     contact, call_log_id, _ = await db.inbound_call_lookup(phone, form.get("CallSid"))
     return _twiml(telephony.stream_twiml(contact["id"], call_log_id, "inbound"))
 
@@ -108,9 +117,15 @@ def _now() -> datetime:
 
 @router.websocket("/ws/voice")
 async def voice_ws(websocket: WebSocket) -> None:
-    # Twilio signs the Media Streams handshake; reject anything else before accepting.
-    if not telephony.is_valid_ws_signature(websocket.headers.get("x-twilio-signature")):
+    # Twilio signs the per-call stream URL; reject anything else before accepting.
+    query = websocket.url.query
+    if not telephony.is_valid_ws_signature(websocket.headers.get("x-twilio-signature"), query):
         logger.warning("Rejecting media stream: missing or invalid X-Twilio-Signature")
+        await websocket.close(code=1008)
+        return
+    try:
+        url_call_log_id = UUID(websocket.query_params["call_log_id"])
+    except (KeyError, ValueError):
         await websocket.close(code=1008)
         return
     await websocket.accept()
@@ -127,36 +142,50 @@ async def voice_ws(websocket: WebSocket) -> None:
         await websocket.close(code=1008)
         return
     log = await db.get_call_log(call_log_id)
-    # The stream URL is public, so only accept streams for a live call row we created.
-    if not log or log["contact_id"] != contact_id or log["outcome"] is not None:
-        logger.warning(f"Rejecting media stream for unknown/finished call {call_log_id}")
+    call_sid = call_data["call_id"]
+    # Only accept a stream for the call its signed URL names, while that call is live, from the
+    # Twilio call it belongs to, and only once.
+    if (
+        call_log_id != url_call_log_id
+        or not log or log["contact_id"] != contact_id or log["outcome"] is not None
+        or (log["provider_call_id"] and log["provider_call_id"] != call_sid)
+        or call_log_id in _live_streams
+    ):
+        logger.warning(f"Rejecting media stream for call {call_log_id}")
         await websocket.close(code=1008)
         return
-
-    s = get_settings()
-    call_sid = call_data["call_id"]
-    if log["provider_call_id"] != call_sid:
-        await db.set_provider_call_id(call_log_id, call_sid)
-    serializer = TwilioFrameSerializer(
-        stream_sid=call_data["stream_id"],
-        call_sid=call_sid,
-        account_sid=s.twilio_account_sid or None,
-        auth_token=s.twilio_auth_token or None,
-    )
-    transport = FastAPIWebsocketTransport(
-        websocket=websocket,
-        params=FastAPIWebsocketParams(
-            audio_in_enabled=True, audio_out_enabled=True, add_wav_header=False, serializer=serializer
-        ),
-    )
-    call = CallContext(
-        contact_id=contact_id,
-        call_log_id=call_log_id,
-        direction="inbound" if params.get("direction") == "inbound" else "outbound",
-        transport="twilio",
-        provider_call_id=call_sid,
-    )
-    await VoiceSession(transport, call, enable_rtvi=False).run()
+    if not all_calls.try_acquire():
+        logger.warning(f"Rejecting media stream for call {call_log_id}: concurrent call limit reached")
+        await websocket.close(code=1013)
+        return
+    _live_streams.add(call_log_id)  # claim before any await so a second handshake can't slip in
+    try:
+        s = get_settings()
+        if log["provider_call_id"] != call_sid:
+            await db.set_provider_call_id(call_log_id, call_sid)
+        serializer = TwilioFrameSerializer(
+            stream_sid=call_data["stream_id"],
+            call_sid=call_sid,
+            account_sid=s.twilio_account_sid or None,
+            auth_token=s.twilio_auth_token or None,
+        )
+        transport = FastAPIWebsocketTransport(
+            websocket=websocket,
+            params=FastAPIWebsocketParams(
+                audio_in_enabled=True, audio_out_enabled=True, add_wav_header=False, serializer=serializer
+            ),
+        )
+        call = CallContext(
+            contact_id=contact_id,
+            call_log_id=call_log_id,
+            direction="inbound" if params.get("direction") == "inbound" else "outbound",
+            transport="twilio",
+            provider_call_id=call_sid,
+        )
+        await VoiceSession(transport, call, enable_rtvi=False).run()
+    finally:
+        _live_streams.discard(call_log_id)
+        all_calls.release()
 
 
 # --- Browser WebRTC (the $0 test path) -----------------------------------------
@@ -187,7 +216,10 @@ async def _prepare_webrtc_call(request_data: dict) -> CallContext:
         contact, call_log_id, _ = await db.inbound_call_lookup(WEBRTC_TEST_INBOUND_PHONE, None, direction="webrtc")
         return CallContext(contact_id=contact["id"], call_log_id=call_log_id, direction="inbound", transport="webrtc")
     if contact_id:
-        contact = await db.get_contact(UUID(contact_id))
+        try:
+            contact = await db.get_contact(UUID(str(contact_id)))
+        except ValueError:
+            raise HTTPException(422, "contact_id must be a UUID") from None
         if contact is None:
             raise HTTPException(404, "contact not found")
     else:
@@ -204,6 +236,7 @@ async def _run_browser_call(session: VoiceSession) -> None:
         await session.run()
     finally:
         browser_calls.release()
+        all_calls.release()
 
 
 @router.post("/api/webrtc/offer", dependencies=[Depends(limit("webrtc"))])
@@ -212,10 +245,14 @@ async def webrtc_offer(offer: WebRTCOffer, _user: dict = Depends(require_user)) 
     if not offer.pc_id:  # renegotiations reuse the existing session
         if not browser_calls.try_acquire():
             raise HTTPException(429, "too many browser calls in progress; hang up another call first")
+        if not all_calls.try_acquire():
+            browser_calls.release()
+            raise HTTPException(429, "the line is busy: too many calls in progress")
         try:
             call = await _prepare_webrtc_call(offer.request_data or {})
         except Exception:
             browser_calls.release()
+            all_calls.release()
             raise
 
     async def on_connection(connection: SmallWebRTCConnection):
@@ -243,7 +280,8 @@ async def webrtc_offer(offer: WebRTCOffer, _user: dict = Depends(require_user)) 
         )
     finally:
         if call is not None and not started:
-            browser_calls.release()  # the session never started, so free its slot
+            browser_calls.release()  # the session never started, so free its slots
+            all_calls.release()
     if answer is None:
         raise HTTPException(500, "no SDP answer")
     if call is not None:

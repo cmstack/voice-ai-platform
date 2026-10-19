@@ -215,6 +215,11 @@ automatically at `next_attempt_at`.
    restrict Twilio's own **Voice Geographic Permissions** to the same countries.
 5. Recording is off by default. If you turn it on in Agent Studio, the agent reads the recording
    notice right after its opening line. Check the consent rules where you and your callers are.
+   Recordings play in the contact drawer through the voice engine, which signs in to Twilio for you.
+   In the Twilio console, also turn on **HTTP Basic Authentication for media access**, so recording
+   links don't work for anyone who simply has the URL.
+6. At most `MAX_CONCURRENT_CALLS` (default 10) calls run at once, counting phone and browser calls
+   together. Extra inbound callers hear "all of our lines are busy" and are asked to call back.
 
 Twilio webhooks are signature-checked, so the tunnel URL must exactly match
 `PUBLIC_VOICE_WEBHOOK_BASE_URL`.
@@ -239,14 +244,29 @@ npm --prefix apps/web run typecheck && npm --prefix apps/web run lint && npm --p
 
 ## 7. Before exposing it beyond your machine
 
-- Set `APP_ENV="production"`. The voice engine then refuses to start with known default secrets,
-  default database credentials, disabled Twilio signature checks, or a non-https webhook URL.
+- Production mode switches on by itself (`APP_ENV="auto"`) as soon as Twilio is enabled or the public
+  or Supabase URLs aren't local. You can also set `APP_ENV="production"` explicitly. The voice
+  engine then refuses to start with any of these:
+  - known default secrets or default database credentials;
+  - disabled Twilio signature checks, or a non-https webhook URL;
+  - `LOG_LEVEL=DEBUG`;
+  - non-local `http://` CORS origins.
+
+  It also hides `/docs` and `/openapi.json`.
+- Keep `LOG_LEVEL="INFO"`. At DEBUG, Pipecat writes full prompts, including callers' personal
+  details, to the logs.
+- Set `RETENTION_DAYS` to your data policy. Older transcripts, recordings and extracted details are
+  purged daily; outcomes and summaries are kept.
 - Use a hosted Supabase project with its own JWT secret and keys. **Never run `supabase/seed.sql`
   against it**: it contains a known admin password.
 - Create your admin user and grant the role (SQL above). Keep sign-up off.
 - Generate a real `LEAD_WEBHOOK_SECRET`, and serve everything over HTTPS.
 - Behind a reverse proxy, run uvicorn with `--proxy-headers --forwarded-allow-ips=<proxy ip>` so rate
-  limits see real client IPs.
+  limits see real client IPs. Rate limits live in the engine's memory, so run a single worker or add
+  limits at the proxy too.
+- The dashboard sends a Content-Security-Policy that only allows connections to itself, your Supabase
+  URL and your voice engine URL. Set `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_VOICE_ENGINE_URL`
+  before `npm run build`, because the policy is fixed at build time.
 - Review `ALLOWED_DIAL_COUNTRY_CODES`, the dial limits and consent capture with whoever owns
   compliance.
 
@@ -277,4 +297,7 @@ docker compose up --build
 | Voice engine refuses to start: "Refusing to start in production" | Fix each listed setting, or use `APP_ENV="development"` on your own machine. |
 | "Lead created but not dialed" | The toast gives the reason: consent, calling hours, a dial limit or the country allowlist. Queued dials retry on their own. |
 | Browser call fails with "too many browser calls in progress" | Hang up an open simulator call (limit `MAX_CONCURRENT_BROWSER_CALLS`). |
+| Voice engine refuses to start right after setting a tunnel URL | A non-local webhook URL switches on production mode. Replace the local dev secrets, or for a quick local Twilio test set `APP_ENV="development"`. |
+| Board stops updating live | Check the browser console for CSP errors (wrong `NEXT_PUBLIC_*` URLs at build time) and that you're signed in as an admin. |
+| "Recording unavailable" in the drawer | Set `TWILIO_ACCOUNT_SID` and `TWILIO_AUTH_TOKEN` on the voice engine; it fetches recordings from Twilio for you. |
 | Reset all local data | `supabase db reset` re-applies the migrations and seed. |

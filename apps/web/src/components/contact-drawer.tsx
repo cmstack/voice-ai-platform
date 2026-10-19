@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { format } from "date-fns";
-import { ChevronDown, ChevronRight, PhoneOff, Plus, Trash2 } from "lucide-react";
+import { ChevronDown, ChevronRight, PhoneOff, Play, Plus, Trash2 } from "lucide-react";
 import { LiveDot } from "@/components/kanban-board";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
@@ -15,7 +15,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { formatDuration, formatPhone } from "@/lib/format";
-import { supabase } from "@/lib/supabase";
+import { supabase, voiceEngineFetch } from "@/lib/supabase";
 import { STAGES, STAGE_LABELS, type CallLog, type CallOutcome, type Contact, type PipelineStage } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
@@ -125,7 +125,7 @@ function CallList({ calls }: { calls: CallLog[] }) {
           {call.summary && <p className="mt-3 text-sm leading-relaxed text-foreground">{call.summary}</p>}
           <FlowPath call={call} />
           {call.recording_url && (
-            <audio controls preload="none" src={call.recording_url} className="mt-3 h-8 w-full" />
+            <RecordingPlayer callLogId={call.id} />
           )}
           {(call.transcript?.length ?? 0) > 0 && (
             <Collapsible className="mt-3">
@@ -156,6 +156,36 @@ function CallList({ calls }: { calls: CallLog[] }) {
         </li>
       ))}
     </ol>
+  );
+}
+
+/** Loads the recording through the voice engine (admin auth), never straight from Twilio. */
+function RecordingPlayer({ callLogId }: { callLogId: string }) {
+  const [src, setSrc] = useState<string | null>(null);
+  const [state, setState] = useState<"idle" | "loading" | "error">("idle");
+
+  useEffect(() => () => { if (src) URL.revokeObjectURL(src); }, [src]);
+
+  async function load() {
+    setState("loading");
+    try {
+      const res = await voiceEngineFetch(`/api/recordings/${callLogId}`);
+      if (!res.ok) throw new Error(String(res.status));
+      setSrc(URL.createObjectURL(await res.blob()));
+      setState("idle");
+    } catch {
+      setState("error");
+    }
+  }
+
+  if (src) return <audio controls autoPlay src={src} className="mt-3 h-8 w-full" />;
+  return (
+    <div className="mt-3 flex items-center gap-2">
+      <Button variant="outline" size="sm" onClick={load} disabled={state === "loading"}>
+        <Play strokeWidth={1.75} /> {state === "loading" ? "Loading…" : "Play recording"}
+      </Button>
+      {state === "error" && <span className="text-xs text-danger-ink">Recording unavailable.</span>}
+    </div>
   );
 }
 

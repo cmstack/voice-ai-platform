@@ -36,14 +36,27 @@ def _webhook(path: str, **query: str) -> str:
     return f"{base}{path}" + (f"?{urlencode(query)}" if query else "")
 
 
+def stream_url(call_log_id: UUID) -> str:
+    """Per-call stream URL. Twilio signs the full URL, so every call gets a different signature
+    and a captured handshake header can't be replayed for another call."""
+    return f"{get_settings().public_ws_url}?{urlencode({'call_log_id': str(call_log_id)})}"
+
+
 def stream_twiml(contact_id: UUID, call_log_id: UUID, direction: str) -> str:
     response = VoiceResponse()
     connect = Connect()
-    stream = connect.stream(url=get_settings().public_ws_url)
+    stream = connect.stream(url=stream_url(call_log_id))
     stream.parameter(name="contact_id", value=str(contact_id))
     stream.parameter(name="call_log_id", value=str(call_log_id))
     stream.parameter(name="direction", value=direction)
     response.append(connect)
+    return str(response)
+
+
+def busy_twiml() -> str:
+    response = VoiceResponse()
+    response.say("Sorry, all of our lines are busy right now. Please call back in a few minutes.")
+    response.hangup()
     return str(response)
 
 
@@ -104,7 +117,12 @@ async def initiate_outbound_call(contact_id: UUID, call_log_id: UUID, phone: str
 
 
 async def bridge_call(provider_call_id: str, human_phone: str) -> None:
-    """Redirect the live call out of the media stream and into a <Dial> to the human."""
+    """Redirect the live call out of the media stream and into a <Dial> to the human.
+
+    The transfer number is a real dial too, so it must be in the allowed calling countries.
+    """
+    if not dial_guard.country_allowed(human_phone, get_settings().allowed_dial_country_codes):
+        raise dial_guard.DialBlocked(f"transfer number {mask_phone(human_phone)} is outside the allowed calling countries")
     response = VoiceResponse()
     response.say("Connecting you now.")
     dial = Dial(caller_id=get_settings().twilio_phone_number or None, timeout=25)
@@ -114,10 +132,11 @@ async def bridge_call(provider_call_id: str, human_phone: str) -> None:
     await asyncio.to_thread(lambda: _client().calls(provider_call_id).update(twiml=twiml))
 
 
-def is_valid_ws_signature(signature: str | None) -> bool:
+def is_valid_ws_signature(signature: str | None, query: str = "") -> bool:
     """Validate X-Twilio-Signature on the Media Streams WebSocket handshake.
 
-    Twilio signs the stream URL it was given in our TwiML (`public_ws_url`) with no POST params.
+    Twilio signs the stream URL it was given in our TwiML (`stream_url()`, including its
+    per-call query string) with no POST params.
     Set VALIDATE_TWILIO_WS_SIGNATURE=false only to debug a proxy that rewrites the URL.
     """
     s = get_settings()
@@ -126,7 +145,7 @@ def is_valid_ws_signature(signature: str | None) -> bool:
     if not (signature and s.twilio_auth_token):
         return False
     validator = RequestValidator(s.twilio_auth_token)
-    url = s.public_ws_url
+    url = s.public_ws_url + (f"?{query}" if query else "")
     # Twilio's docs require validating this header but don't spell out the scheme of the signed
     # URL, so accept the wss:// form we sent and its https:// equivalent.
     https_url = url.replace("wss://", "https://", 1).replace("ws://", "http://", 1)

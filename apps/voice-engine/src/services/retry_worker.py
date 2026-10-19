@@ -38,8 +38,5 @@ async def run_once(now: datetime | None = None) -> int:
     return len(claimed)
 
 
-def start() -> AsyncIOScheduler:
-    scheduler = AsyncIOScheduler()
-    scheduler.add_job(run_once, "interval", seconds=POLL_SECONDS, max_instances=1, coalesce=True)
-    scheduler.start()
-    return scheduler
+def add_job(scheduler: AsyncIOScheduler) -> None:
+    scheduler.add_job(run_once, "interval", seconds=POLL_SECONDS, max_instances=1, coalesce=True, id="redials")

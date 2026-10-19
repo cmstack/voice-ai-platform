@@ -37,7 +37,8 @@ def stream_params(xml: str) -> dict:
 
 def test_stream_twiml_shape():
     params = stream_params(telephony.stream_twiml("c-1", "l-1", "outbound"))
-    assert params == {"url": "wss://voice.example.test/ws/voice", "contact_id": "c-1", "call_log_id": "l-1", "direction": "outbound"}
+    assert params == {"url": "wss://voice.example.test/ws/voice?call_log_id=l-1", "contact_id": "c-1",
+                      "call_log_id": "l-1", "direction": "outbound"}
 
 
 async def test_inbound_rejects_unsigned():
@@ -159,8 +160,9 @@ def test_ws_rejects_unknown_call_even_when_signed(monkeypatch):
     from fastapi.testclient import TestClient
     from starlette.websockets import WebSocketDisconnect
 
-    sig = RequestValidator(TOKEN).compute_signature(get_settings().public_ws_url, {})
-    with TestClient(ws_app()) as tc, tc.websocket_connect("/ws/voice", headers={"X-Twilio-Signature": sig}) as ws:
+    unknown = "00000000-0000-0000-0000-000000000000"
+    sig = RequestValidator(TOKEN).compute_signature(f"{get_settings().public_ws_url}?call_log_id={unknown}", {})
+    with TestClient(ws_app()) as tc, tc.websocket_connect(f"/ws/voice?call_log_id={unknown}", headers={"X-Twilio-Signature": sig}) as ws:
         for m in _ws_start_messages():
             ws.send_json(m)
         with pytest.raises(WebSocketDisconnect) as exc:

@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { RealtimePostgresChangesPayload } from "@supabase/supabase-js";
+import type { RealtimeChannel, RealtimePostgresChangesPayload } from "@supabase/supabase-js";
 import { supabase } from "@/lib/supabase";
 import type { CallLog, Contact, PipelineStage, Sentiment } from "@/lib/types";
 
@@ -56,39 +56,52 @@ export function useCrm() {
       setLoading(false);
     })();
 
-    const channel = db
-      .channel("crm-pipeline")
-      .on("postgres_changes", { event: "*", schema: "public", table: "contacts" }, (p: RealtimePostgresChangesPayload<Contact>) => {
-        setContacts((prev) => {
-          const next = new Map(prev);
-          if (p.eventType === "DELETE") {
-            next.delete((p.old as Contact).id);
-          } else {
-            const row = p.new as Contact;
-            if (prev.get(row.id)?.stage !== row.stage) flagMoved(row.id);
-            next.set(row.id, row);
-          }
-          return next;
-        });
-      })
-      .on("postgres_changes", { event: "*", schema: "public", table: "call_logs" }, (p: RealtimePostgresChangesPayload<CallLog>) => {
-        if (p.eventType === "DELETE") return;
-        const row = p.new as CallLog;
-        setLatestCalls((prev) => {
-          const current = prev.get(row.contact_id);
-          if (current && current.id !== row.id && current.created_at > row.created_at) return prev;
-          return new Map(prev).set(row.contact_id, row);
-        });
-        setCallLogVersion((v) => v + 1);
-      })
-      .on("postgres_changes", { event: "*", schema: "public", table: "appointments" }, () => {
-        void refreshBooked();
-      })
-      .subscribe();
+    // Realtime must join with the user's access token, not the anon key: RLS only shows rows to
+    // admins, so an anonymous subscription silently receives nothing. On a page reload the session
+    // loads from cookies asynchronously, so authenticate first, then subscribe.
+    let channel: RealtimeChannel | null = null;
+    const { data: authListener } = db.auth.onAuthStateChange((_event, session) => {
+      void db.realtime.setAuth(session?.access_token ?? null);
+    });
+    (async () => {
+      const { data } = await db.auth.getSession();
+      if (cancelled) return;
+      await db.realtime.setAuth(data.session?.access_token ?? null);
+      channel = db
+        .channel("crm-pipeline")
+        .on("postgres_changes", { event: "*", schema: "public", table: "contacts" }, (p: RealtimePostgresChangesPayload<Contact>) => {
+          setContacts((prev) => {
+            const next = new Map(prev);
+            if (p.eventType === "DELETE") {
+              next.delete((p.old as Contact).id);
+            } else {
+              const row = p.new as Contact;
+              if (prev.get(row.id)?.stage !== row.stage) flagMoved(row.id);
+              next.set(row.id, row);
+            }
+            return next;
+          });
+        })
+        .on("postgres_changes", { event: "*", schema: "public", table: "call_logs" }, (p: RealtimePostgresChangesPayload<CallLog>) => {
+          if (p.eventType === "DELETE") return;
+          const row = p.new as CallLog;
+          setLatestCalls((prev) => {
+            const current = prev.get(row.contact_id);
+            if (current && current.id !== row.id && current.created_at > row.created_at) return prev;
+            return new Map(prev).set(row.contact_id, row);
+          });
+          setCallLogVersion((v) => v + 1);
+        })
+        .on("postgres_changes", { event: "*", schema: "public", table: "appointments" }, () => {
+          void refreshBooked();
+        })
+        .subscribe();
+    })();
 
     return () => {
       cancelled = true;
-      void db.removeChannel(channel);
+      authListener.subscription.unsubscribe();
+      if (channel) void db.removeChannel(channel);
     };
   }, [flagMoved, refreshBooked]);
 
