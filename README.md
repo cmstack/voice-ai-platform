@@ -12,7 +12,8 @@ appointments on Cal.com mid-call, and moves leads across a realtime Kanban CRM.
 You can run everything for **$0 in telephony costs**: the "Test Agent in Browser" button talks to the
 agent over WebRTC with your microphone. Twilio is only needed for real phone calls.
 
-The full system design lives in [CLAUDE.md](CLAUDE.md).
+How it fits together, with diagrams of the call flows, is in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md);
+the full specification is in [CLAUDE.md](CLAUDE.md).
 
 ---
 
@@ -39,8 +40,10 @@ aws bedrock get-foundation-model-availability --region us-east-1 --model-id amaz
 ```
 
 **Optional:**
-- A [Cal.com](https://cal.com) API key and event type ID, to book real appointments.
-- A Twilio account, a phone number and a public tunnel such as ngrok, for real phone calls.
+- A [Cal.com](https://cal.com) API key and event type ID, to book real appointments
+  ([setup steps](#5-connect-calcom-calendar-booking)).
+- A Twilio account, a phone number, and a public tunnel such as ngrok, for real phone calls
+  ([setup steps](#6-connect-twilio-real-phone-calls)).
 
 ---
 
@@ -78,7 +81,7 @@ Then fill in these values:
 
 - `NEXT_PUBLIC_SUPABASE_ANON_KEY` and `SUPABASE_JWT_SECRET`: shown by `supabase status` as
   `ANON_KEY` and `JWT_SECRET`.
-- `CAL_API_KEY`: optional, needed for real bookings.
+- `CAL_API_KEY`: optional, needed for real bookings (see [Connect Cal.com](#5-connect-calcom-calendar-booking)).
 - `LEAD_WEBHOOK_SECRET`: 24+ random characters (`openssl rand -hex 24`), used by external lead
   forms. Placeholders like `change-me` are treated as unset, so the webhook stays disabled.
 
@@ -188,45 +191,148 @@ automatically at `next_attempt_at`.
 
 ---
 
-## 5. Real phone calls (Twilio)
+## 5. Connect Cal.com (calendar booking)
 
-1. Expose the engine publicly with a tunnel:
+Without Cal.com the agent still talks and qualifies, but every calendar lookup says "the calendar is
+unavailable" and it offers a callback instead. With it, the agent reads your real availability and
+books meetings mid-call.
+
+1. **Create the event type the agent will book.** In Cal.com, open **Event Types** and create (or
+   pick) the meeting, for example a 15-minute intro call. Keep its booking questions to the
+   defaults (name, email, notes): the agent only collects those, so an extra *required* question
+   makes every booking fail. Turn **Requires confirmation** off if you want bookings confirmed
+   instantly.
+2. **Find its event type ID.** Open the event type; the number at the end of the page address
+   (`…/event-types/123456`) is its ID.
+3. **Create an API key.** In Cal.com, go to **Settings → Developer → API Keys**, create a key, and
+   copy it (it starts with `cal_live_`). Treat it like a password.
+4. **Add the key to `.env`** and restart the voice engine:
+
+   ```ini
+   CAL_API_KEY="cal_live_..."
+   ```
+
+   Self-hosting Cal.com? Also set `CAL_API_BASE_URL` to your instance's `/v2` API URL (the default
+   is `https://api.cal.com/v2`).
+5. **Set the event type and timezone in Agent Studio** (`/settings` → *Calendar, transfer & calling
+   hours*): enter the event type ID, pick the timezone the agent should quote times in, and save.
+6. **Check the key and event type work** before making a call. This asks Cal.com for open slots
+   over the next week:
+
+   ```bash
+   curl -s "https://api.cal.com/v2/slots?eventTypeId=123456&start=$(date +%F)&end=$(date -v+7d +%F)&timeZone=America/Chicago" -H "Authorization: Bearer $CAL_API_KEY" -H "cal-api-version: 2024-09-04"
+   ```
+
+   You should get `"status":"success"` with dates and times. An authentication error means the key
+   is wrong; an empty `data` object means the event type has no availability in that window. On
+   Linux, use `$(date -d '+7 days' +%F)` for the end date.
+7. **Test it end to end.** Open **Test Agent in Browser**, say you'd like to book, pick a day, accept
+   a time, and give your name and email. The tool log shows `check_calendar_availability` and
+   `book_calendar_appointment`, the card moves to **Appointment Booked**, and the booking appears in
+   Cal.com with an email invite.
+
+What the agent sends Cal.com: the attendee's name, email, and phone number, the timezone from Agent
+Studio, and a short note on the caller's goals. It offers at most three times per lookup, books
+only a time it offered on that call, and books at most one upcoming meeting per contact
+(`MAX_UPCOMING_APPOINTMENTS_PER_CONTACT`) and 20 per hour overall (`MAX_BOOKINGS_PER_HOUR`).
+
+---
+
+## 6. Connect Twilio (real phone calls)
+
+Twilio is optional: the browser simulator needs none of this. Connect it when you want the agent to
+answer a real number and place speed-to-lead calls.
+
+1. **Get a Twilio account and a voice number.** In the Twilio Console, buy a phone number with
+   **Voice** capability (Phone Numbers → Buy a number). Trial accounts can only call verified
+   numbers and play a trial message first, which confuses voicemail detection, so upgrade before
+   testing outbound calls.
+2. **Copy your credentials.** The **Account SID** and **Auth Token** are under *Account Info* on the
+   Console home page.
+3. **Give the voice engine a public HTTPS address.** Twilio has to reach it, so run a tunnel to the
+   engine's port (use your own port if it isn't 8000):
 
    ```bash
    ngrok http 8000
    ```
 
-2. In `.env`, set:
-   - `TELEPHONY_PROVIDER="twilio"`
-   - `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN` and `TWILIO_PHONE_NUMBER`
-   - `PUBLIC_VOICE_WEBHOOK_BASE_URL`: your https tunnel URL
+   Copy the `https://…` forwarding URL. A new ngrok session gets a new URL unless you reserve one,
+   and every step below that uses the URL must then be repeated.
+4. **Fill in `.env`:**
 
-   Then restart the engine.
-3. In the Twilio console, set your number's **"A call comes in"** webhook to
-   `POST https://<tunnel>/api/calls/inbound`.
-4. Outbound calls now dial for real, but only when all of these hold:
-   - the number is in `ALLOWED_DIAL_COUNTRY_CODES` (US and Canada by default);
-   - the contact has consent on record;
-   - it's within the business hours set in Agent Studio;
-   - the number hasn't been dialed 3 times in the past 24 hours, and fewer than 30 dials have gone
-     out in the past hour.
+   ```ini
+   TELEPHONY_PROVIDER="twilio"
+   TWILIO_ACCOUNT_SID="AC..."
+   TWILIO_AUTH_TOKEN="..."
+   TWILIO_PHONE_NUMBER="+17135550100"
+   PUBLIC_VOICE_WEBHOOK_BASE_URL="https://your-tunnel.ngrok-free.app"
+   ```
 
-   Unanswered calls and voicemails are retried automatically, up to 3 times and 4 hours apart. Also
-   restrict Twilio's own **Voice Geographic Permissions** to the same countries.
-5. Recording is off by default. If you turn it on in Agent Studio, the agent reads the recording
-   notice right after its opening line. Check the consent rules where you and your callers are.
-   Recordings play in the contact drawer through the voice engine, which signs in to Twilio for you.
-   In the Twilio console, also turn on **HTTP Basic Authentication for media access**, so recording
-   links don't work for anyone who simply has the URL.
-6. At most `MAX_CONCURRENT_CALLS` (default 10) calls run at once, counting phone and browser calls
-   together. Extra inbound callers hear "all of our lines are busy" and are asked to call back.
+   Use the number in `+` international format, and paste the tunnel URL exactly as ngrok shows it,
+   with no trailing slash. Every webhook and media stream is signature-checked against this URL, so
+   any difference makes Twilio's requests fail with 403.
+5. **Mind production mode.** Turning on Twilio switches the engine into production mode
+   (`APP_ENV="auto"`), and it then refuses to start with the local development secrets. For a quick
+   test on your own machine, set `APP_ENV="development"`. For anything real, replace the secrets as
+   described in [Before exposing it](#8-before-exposing-it-beyond-your-machine).
+6. **Restart the voice engine**, then check it's reachable through the tunnel:
 
-Twilio webhooks are signature-checked, so the tunnel URL must exactly match
-`PUBLIC_VOICE_WEBHOOK_BASE_URL`.
+   ```bash
+   curl -s https://your-tunnel.ngrok-free.app/health
+   ```
+
+   It should return `{"ok":true}`.
+7. **Point your number at the engine for inbound calls.** In the Console, open Phone Numbers →
+   Manage → Active numbers → your number. Under *Voice Configuration*, set **A call comes in** to
+   **Webhook**, `https://your-tunnel.ngrok-free.app/api/calls/inbound`, method **HTTP POST**, and
+   save. You don't configure anything for outbound calls or status updates: the engine sets those
+   URLs on each call it places.
+8. **Lock down the account.** In the Console:
+   - **Voice → Settings → Geo permissions:** allow only the countries you call (US and Canada by
+     default, matching `ALLOWED_DIAL_COUNTRY_CODES`).
+   - **Voice → Settings → General:** turn on **HTTP Basic Authentication for media access**, so
+     recording links don't work for anyone who simply has the URL. The dashboard plays recordings
+     through the voice engine, which signs in to Twilio for you.
+9. **Set the transfer number** (optional) in Agent Studio → *Human transfer phone*, in `+`
+   international format. It must be in an allowed country; otherwise the agent offers a callback
+   instead of transferring.
+10. **Test an inbound call.** Call your Twilio number and the agent greets you. A first-time caller
+    gets a card in **New Lead**; after you hang up it moves to its next stage, with a summary and
+    transcript in the contact drawer.
+11. **Test an outbound call.** Click **+ New Lead / Dial**, enter a number you can answer, tick
+    **The lead agreed to be called**, and keep **Call immediately** on. Your phone rings within a
+    few seconds; after you say "Hello?", the agent gives its opener.
+
+When a dial is held back, the toast and the API response say why (`blocked_reason`). The dial
+guard only places a call when all of these hold:
+
+- the number is in `ALLOWED_DIAL_COUNTRY_CODES` (US and Canada by default);
+- the contact has consent on record;
+- it's within the business hours set in Agent Studio (weekdays only);
+- the number hasn't been dialed 3 times in the past 24 hours, fewer than 30 dials went out in the
+  past hour, and fewer than `MAX_CONCURRENT_CALLS` (10) calls are live.
+
+Calling hours and limits are temporary blocks: the dial is queued and retried at
+`next_attempt_at`. Missing consent and a disallowed country are permanent until you fix them.
+Unanswered calls and voicemails are retried up to 3 times, 4 hours apart. Extra inbound callers
+beyond `MAX_CONCURRENT_CALLS` hear "all of our lines are busy".
+
+**Recording** is off by default. If you turn it on in Agent Studio, outbound calls are recorded and
+the agent reads the recording notice right after its opening line. Check the consent rules where
+you and your callers are.
+
+**If inbound calls fail:**
+
+| Symptom | Likely cause |
+| --- | --- |
+| Twilio's call log shows 403 from `/api/calls/inbound` | `PUBLIC_VOICE_WEBHOOK_BASE_URL` doesn't exactly match the URL Twilio called (scheme, host, trailing slash), or the auth token is wrong |
+| Twilio shows 502/timeout | The tunnel or engine isn't running, or the tunnel points at the wrong port |
+| The call connects but stays silent | Check the engine log: a rejected media stream ("invalid X-Twilio-Signature") means the same URL mismatch; a Bedrock error means AWS access |
+| You hear "all of our lines are busy" | `MAX_CONCURRENT_CALLS` is reached; hang up other calls or raise it |
 
 ---
 
-## 6. Tests
+## 7. Tests
 
 The voice-engine tests use the local Supabase database, so run `supabase start` first:
 
@@ -242,7 +348,7 @@ npm --prefix apps/web run typecheck && npm --prefix apps/web run lint && npm --p
 
 ---
 
-## 7. Before exposing it beyond your machine
+## 8. Before exposing it beyond your machine
 
 - Production mode switches on by itself (`APP_ENV="auto"`) as soon as Twilio is enabled or the public
   or Supabase URLs aren't local. You can also set `APP_ENV="production"` explicitly. The voice
@@ -272,7 +378,7 @@ npm --prefix apps/web run typecheck && npm --prefix apps/web run lint && npm --p
 
 ---
 
-## 8. Docker (optional)
+## 9. Docker (optional)
 
 `docker-compose.yml` runs the engine and dashboard in containers. The database still comes from
 `supabase start`, and your `~/.aws` folder is mounted read-only for Bedrock credentials.

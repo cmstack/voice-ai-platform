@@ -67,7 +67,9 @@ A self-hosted, single-tenant AI voice agent + CRM that handles **outbound speed-
 ```text
 .
 ├── CLAUDE.md
-├── README.md                          # how to run it
+├── README.md                          # how to run it, Cal.com + Twilio setup
+├── docs/
+│   └── ARCHITECTURE.md                # architecture and flow design, Mermaid diagrams
 ├── .env.example
 ├── docker-compose.yml
 ├── supabase/
