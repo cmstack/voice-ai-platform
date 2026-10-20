@@ -16,10 +16,11 @@ function origin(url: string | undefined): string[] {
 const connect = ["'self'", ...origin(process.env.NEXT_PUBLIC_SUPABASE_URL), ...origin(process.env.NEXT_PUBLIC_VOICE_ENGINE_URL)];
 
 // Next.js injects inline bootstrap scripts, so script-src needs 'unsafe-inline' without a nonce setup;
-// dev mode (React Refresh) also needs 'unsafe-eval'. Framing is fully blocked (clickjacking).
+// dev mode (React Refresh) also needs 'unsafe-eval'. blob: is for the simulator's AudioWorklet (the
+// Pipecat WavRecorder loads its worklet from a same-origin blob URL). Framing is fully blocked.
 const csp = [
   "default-src 'self'",
-  `script-src 'self' 'unsafe-inline'${isDev ? " 'unsafe-eval'" : ""}`,
+  `script-src 'self' 'unsafe-inline' blob:${isDev ? " 'unsafe-eval'" : ""}`,
   "style-src 'self' 'unsafe-inline'",
   "img-src 'self' data: blob:",
   "font-src 'self' data:",

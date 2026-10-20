@@ -299,5 +299,6 @@ docker compose up --build
 | Browser call fails with "too many browser calls in progress" | Hang up an open simulator call (limit `MAX_CONCURRENT_BROWSER_CALLS`). |
 | Voice engine refuses to start right after setting a tunnel URL | A non-local webhook URL switches on production mode. Replace the local dev secrets, or for a quick local Twilio test set `APP_ENV="development"`. |
 | Board stops updating live | Check the browser console for CSP errors (wrong `NEXT_PUBLIC_*` URLs at build time) and that you're signed in as an admin. |
+| Simulator error "Failed to load call object bundle … dailywebrtc.net" | You're on an older build. The simulator now uses Pipecat's `WavMediaManager`, so it no longer downloads Daily's script (which the CSP blocks). Pull the latest code and restart the dashboard. |
 | "Recording unavailable" in the drawer | Set `TWILIO_ACCOUNT_SID` and `TWILIO_AUTH_TOKEN` on the voice engine; it fetches recordings from Twilio for you. |
 | Reset all local data | `supabase db reset` re-applies the migrations and seed. |

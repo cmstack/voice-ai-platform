@@ -254,7 +254,7 @@ It only runs when the local time in `agent_config.timezone` falls within busines
 * **Logs:** `LOG_LEVEL` defaults to INFO. At DEBUG, Pipecat logs whole system prompts, including caller data. Phone numbers are masked in voice-engine logs (`+15550101234` → `+*******1234`).
 * **Admin revocation:** the API caches each user's current role for 30 s (`services/auth.py`); RLS checks it on every statement.
 * **Dashboard headers (`next.config.ts`):**
-  * A CSP whose `connect-src` is limited to self plus the Supabase and voice-engine origins (http and ws). It has `frame-ancestors 'none'`, and `'unsafe-eval'` in dev only. `'unsafe-inline'` scripts remain because Next injects inline bootstrap without a nonce setup.
+  * A CSP whose `connect-src` is limited to self plus the Supabase and voice-engine origins (http and ws). It has `frame-ancestors 'none'`, and `'unsafe-eval'` in dev only, and `blob:` in `script-src` for the simulator's AudioWorklet (Pipecat's recorder loads its worklet from a same-origin blob URL). `'unsafe-inline'` scripts remain because Next injects inline bootstrap without a nonce setup.
   * `X-Frame-Options: DENY`, `nosniff`, `Referrer-Policy`, `Permissions-Policy` (microphone only), HSTS in production, and no `X-Powered-By`.
 * **Realtime auth:** `use-crm.ts` calls `realtime.setAuth(access_token)` before subscribing and on every auth change. Without it, a page reload subscribes as `anon` and RLS silently drops every change.
 * **Dependencies:** the `shadcn` CLI is a devDependency, and Next's bundled PostCSS is overridden to a patched 8.5.x. `npm audit --omit=dev` and `pip-audit` report 0 known vulnerabilities.
@@ -289,6 +289,7 @@ Calm, Linear-like shadcn/ui on Radix: 56px top nav, 8px grid, Geist + Geist Mono
     * Inbound / speed-to-lead toggle, with a lead picker for speed-to-lead.
     * Plain-language status (Not connected, Connecting…, Live with a timer, Call ended).
     * A blocked-microphone alert driven by Pipecat `onDeviceError`.
+    * Uses `WavMediaManager` (plain `getUserMedia`), not the transport's default `DailyMediaManager`. The default downloads Daily's call-machine script from `c.dailywebrtc.net` at runtime, which the CSP blocks, and it would run third-party code next to the admin session.
     * A live transcript and a tool-call log (RTVI events), with empty states.
 * **New lead dialog:** an "The lead agreed to be called" checkbox (sends `consent`). If the dial is blocked, a warning toast shows the reason and the next attempt time.
 * **Agent Studio (`/settings`):** a form bound to `agent_config` (id=1). Fields: agent name, company, Nova Sonic voice, both greeting templates, qualification questions (each becomes a `save_qualification` field), objection handlers, Cal.com event type ID, transfer phone, timezone, redial hours, and call recording (on/off plus notice text). It has a skeleton loader and a sticky save bar showing "Unsaved changes" or "All changes saved".

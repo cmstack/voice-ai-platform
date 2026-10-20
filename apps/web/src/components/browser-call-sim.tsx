@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { PipecatClient, type BotOutputData, type TransportState, type UserInputData } from "@pipecat-ai/client-js";
-import { SmallWebRTCTransport } from "@pipecat-ai/small-webrtc-transport";
+import { SmallWebRTCTransport, WavMediaManager } from "@pipecat-ai/small-webrtc-transport";
 import { AudioLines, Headphones, Mic, MicOff, PhoneIncoming, PhoneOff, PhoneOutgoing, Wrench } from "lucide-react";
 import { LiveDot } from "@/components/kanban-board";
 import { toast } from "sonner";
@@ -53,9 +53,12 @@ export function BrowserCallSim({ contacts }: { contacts: Contact[] }) {
     setLines((prev) => {
       const i = prev.findIndex((l) => l.id === id);
       if (i === -1) return [...prev, { id, role, text, final }];
-      const next = [...prev];
-      next[i] = { ...next[i], text: append ? `${next[i].text} ${text}`.trim() : text, final };
-      return next;
+      const current = prev[i];
+      // Nova Sonic text can arrive twice for the same speech (as generated and as spoken); skip repeats.
+      if (append && current.text.trim().endsWith(text.trim())) return prev;
+      const updated = [...prev];
+      updated[i] = { ...current, text: append ? `${current.text} ${text}`.trim() : text, final };
+      return updated;
     });
   }
 
@@ -69,6 +72,11 @@ export function BrowserCallSim({ contacts }: { contacts: Contact[] }) {
     let userTurn = 0;
 
     const transport = new SmallWebRTCTransport({
+      // The default DailyMediaManager downloads Daily's call-machine script from c.dailywebrtc.net at
+      // runtime, which our CSP blocks (and which would run third-party code next to the admin session).
+      // WavMediaManager captures the mic with plain getUserMedia; bot audio still arrives as a WebRTC
+      // track played by the <audio> element below.
+      mediaManager: new WavMediaManager(),
       webrtcRequestParams: {
         endpoint: `${VOICE_ENGINE_URL}/api/webrtc/offer`,
         headers: new Headers({ Authorization: `Bearer ${token}` }),
