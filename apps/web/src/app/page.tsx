@@ -1,13 +1,12 @@
 "use client";
 
 import { useState } from "react";
-import { CloudOff, RotateCw } from "lucide-react";
 import { BrowserCallSim } from "@/components/browser-call-sim";
 import { ContactDrawer } from "@/components/contact-drawer";
 import { BoardSkeleton, KanbanBoard, LiveDot } from "@/components/kanban-board";
+import { LoadError } from "@/components/load-error";
 import { NewLeadDialog } from "@/components/new-lead-dialog";
 import { TopNav } from "@/components/top-nav";
-import { Button } from "@/components/ui/button";
 import { useCrm } from "@/hooks/use-crm";
 import { cn } from "@/lib/utils";
 
@@ -35,14 +34,7 @@ export default function PipelinePage() {
         {crm.loading ? (
           <BoardSkeleton />
         ) : crm.loadError ? (
-          <div role="alert" className="mx-auto mt-16 flex max-w-sm flex-col items-center gap-2 text-center">
-            <CloudOff className="size-5 text-danger-ink" strokeWidth={1.75} />
-            <p className="text-sm font-semibold">Couldn&apos;t load the pipeline</p>
-            <p className="text-xs text-muted-foreground">{crm.loadError}. Check that Supabase is running, then try again.</p>
-            <Button variant="outline" size="sm" className="mt-2" onClick={crm.retry}>
-              <RotateCw strokeWidth={1.75} /> Try again
-            </Button>
-          </div>
+          <LoadError title="Couldn't load the pipeline" detail={crm.loadError} onRetry={crm.retry} />
         ) : (
           <KanbanBoard
             contacts={crm.contacts}

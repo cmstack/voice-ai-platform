@@ -19,10 +19,12 @@ export function NewLeadDialog() {
   const [dial, setDial] = useState(true);
   const [consent, setConsent] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [phoneError, setPhoneError] = useState<string | null>(null);
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     setBusy(true);
+    setPhoneError(null);
     try {
       const res = await voiceEngineFetch("/api/leads", {
         method: "POST",
@@ -37,7 +39,13 @@ export function NewLeadDialog() {
         }),
       });
       const body = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(errorMessage(body.detail, res.status));
+      if (!res.ok) {
+        if (isPhoneError(body.detail)) {
+          setPhoneError("That doesn't look like a phone number. Use international format, or a 10-digit US number.");
+          return;
+        }
+        throw new Error(errorMessage(body.detail, res.status));
+      }
       if (body.blocked_reason) {
         const when = body.next_attempt_at ? ` Next attempt: ${new Date(body.next_attempt_at).toLocaleString()}.` : "";
         toast.warning(`Lead created but not dialed: ${body.blocked_reason}.${when}`);
@@ -58,7 +66,7 @@ export function NewLeadDialog() {
   }
 
   return (
-    <Dialog open={open} onOpenChange={setOpen}>
+    <Dialog open={open} onOpenChange={(o) => { setOpen(o); if (!o) setPhoneError(null); }}>
       <DialogTrigger asChild>
         <Button variant="outline" aria-label="New Lead / Dial"><Plus strokeWidth={1.75} /><span className="hidden md:inline">New Lead / Dial</span></Button>
       </DialogTrigger>
@@ -70,8 +78,11 @@ export function NewLeadDialog() {
           </DialogHeader>
           <div className="space-y-2">
             <Label htmlFor="lead-phone">Phone</Label>
-            <Input id="lead-phone" required inputMode="tel" autoComplete="tel" placeholder="+1 713 555 0199" aria-describedby="lead-phone-help" value={phone} onChange={(e) => setPhone(e.target.value)} />
-            <p id="lead-phone-help" className="text-xs text-muted-foreground">International format, or a 10-digit US number.</p>
+            <Input id="lead-phone" required inputMode="tel" autoComplete="tel" placeholder="+1 713 555 0199" aria-describedby="lead-phone-help"
+              aria-invalid={phoneError ? true : undefined} value={phone} onChange={(e) => { setPhone(e.target.value); setPhoneError(null); }} />
+            <p id="lead-phone-help" className={phoneError ? "text-xs text-danger-ink" : "text-xs text-muted-foreground"}>
+              {phoneError ?? "International format, or a 10-digit US number."}
+            </p>
           </div>
           <div className="space-y-2">
             <Label htmlFor="lead-name">Full name</Label>
@@ -114,6 +125,10 @@ export function NewLeadDialog() {
       </DialogContent>
     </Dialog>
   );
+}
+
+function isPhoneError(detail: unknown): boolean {
+  return Array.isArray(detail) && detail.some((d: { loc?: unknown[] }) => d.loc?.at(-1) === "phone");
 }
 
 /** Turns a FastAPI error body (a string, or a list of validation errors) into one readable sentence. */

@@ -213,9 +213,9 @@ export function BrowserCallSim({ contacts }: { contacts: Contact[] }) {
         )}
 
         <div className="grid gap-3 md:grid-cols-[1fr_240px]">
-          <ScrollArea className="h-80 rounded-lg border border-border bg-background">
+          <ScrollArea className="h-64 rounded-lg border border-border bg-background md:h-80">
             {lines.length === 0 ? (
-              <div className="flex h-80 flex-col items-center justify-center gap-2 px-6 text-center">
+              <div className="flex h-64 flex-col items-center justify-center gap-2 px-6 text-center md:h-80">
                 <AudioLines className="size-5 text-muted-foreground" strokeWidth={1.75} />
                 <p className="text-sm font-semibold">Live transcript</p>
                 <p className="max-w-[36ch] text-xs text-muted-foreground">
@@ -243,7 +243,7 @@ export function BrowserCallSim({ contacts }: { contacts: Contact[] }) {
               </div>
             )}
           </ScrollArea>
-          <ScrollArea className="h-80 rounded-lg border border-border">
+          <ScrollArea className="h-40 rounded-lg border border-border md:h-80">
             <div className="p-3">
               <p className="mb-3 flex items-center gap-2 text-xs font-semibold text-muted-foreground">
                 <Wrench className="size-3.5" strokeWidth={1.75} /> Tool calls

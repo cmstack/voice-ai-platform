@@ -1,8 +1,9 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { CloudOff, Plus, RotateCw, Trash2 } from "lucide-react";
+import { Plus, Trash2 } from "lucide-react";
 import { toast } from "sonner";
+import { LoadError } from "@/components/load-error";
 import { TopNav } from "@/components/top-nav";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -50,13 +51,8 @@ export default function SettingsPage() {
     return (
       <div className="min-h-dvh">
         <TopNav />
-        <main className="mx-auto mt-16 flex max-w-sm flex-col items-center gap-2 px-4 text-center" role="alert">
-          <CloudOff className="size-5 text-danger-ink" strokeWidth={1.75} />
-          <p className="text-sm font-semibold">Couldn&apos;t load the agent configuration</p>
-          <p className="text-xs text-muted-foreground">{loadError}. Check that Supabase is running, then try again.</p>
-          <Button variant="outline" size="sm" className="mt-2" onClick={() => setAttempt((a) => a + 1)}>
-            <RotateCw strokeWidth={1.75} /> Try again
-          </Button>
+        <main>
+          <LoadError title="Couldn't load the agent configuration" detail={loadError} onRetry={() => setAttempt((a) => a + 1)} />
         </main>
       </div>
     );
