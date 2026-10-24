@@ -62,6 +62,7 @@
  * status pills and KPI chips are fully rounded. Nothing else.
  */
 :root {
+  color-scheme: light;
   --radius: 0.5rem;
   --background: oklch(0.975 0.001 286.375);          /* zinc-100-ish page */
   --foreground: oklch(0.21 0.006 285.885);            /* zinc-900 */
@@ -104,6 +105,7 @@
 }
 
 .dark {
+  color-scheme: dark;
   --background: oklch(0.141 0.005 285.823);           /* zinc-950 */
   --foreground: oklch(0.955 0.002 286.32);
   --card: oklch(0.19 0.006 285.885);
@@ -158,5 +160,12 @@
   }
   html {
     @apply font-sans;
+    /* Native scrollbars, caret and form controls follow the palette, not browser defaults. */
+    scrollbar-color: color-mix(in oklch, var(--muted-foreground) 45%, transparent) transparent;
+    accent-color: var(--brand);
+    caret-color: var(--brand);
+  }
+  a {
+    text-underline-offset: 3px;
   }
 }

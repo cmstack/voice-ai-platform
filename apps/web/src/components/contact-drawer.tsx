@@ -9,7 +9,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
+import { Field } from "@/components/ui/field";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
@@ -53,7 +53,7 @@ export function ContactDrawer({ contact, callLogVersion, onClose }: Props) {
 
   return (
     <Sheet open={!!contact} onOpenChange={(open) => !open && onClose()}>
-      <SheetContent className="w-full gap-0 p-0 sm:max-w-[480px]">
+      <SheetContent className="w-full gap-0 p-0 data-[side=right]:w-full sm:max-w-[480px] data-[side=right]:sm:max-w-[480px]">
         {contact && (
           <>
             <SheetHeader className="gap-2 border-b border-border p-4">
@@ -74,12 +74,12 @@ export function ContactDrawer({ contact, callLogVersion, onClose }: Props) {
                 <TabsTrigger value="details">Contact Details</TabsTrigger>
               </TabsList>
               <TabsContent value="activity" className="min-h-0 flex-1">
-                <ScrollArea className="h-[calc(100vh-150px)] px-4 pb-6">
+                <ScrollArea className="h-full px-4 pb-6">
                   <CallList calls={calls} />
                 </ScrollArea>
               </TabsContent>
               <TabsContent value="details" className="min-h-0 flex-1">
-                <ScrollArea className="h-[calc(100vh-150px)] px-4 pb-6">
+                <ScrollArea className="h-full px-4 pb-6">
                   <DetailsForm key={contact.id + contact.updated_at} contact={contact} />
                 </ScrollArea>
               </TabsContent>
@@ -130,7 +130,7 @@ function CallList({ calls }: { calls: CallLog[] }) {
           {(call.transcript?.length ?? 0) > 0 && (
             <Collapsible className="mt-3">
               <CollapsibleTrigger className="group flex items-center gap-1 rounded text-xs font-semibold text-muted-foreground outline-none hover:text-foreground focus-visible:ring-3 focus-visible:ring-ring/40">
-                <ChevronDown className="h-3.5 w-3.5 transition-transform group-data-[state=open]:rotate-180" />
+                <ChevronDown className="size-3.5 transition-transform group-data-[state=open]:rotate-180" strokeWidth={1.75} />
                 Transcript ({call.transcript!.length} turns)
               </CollapsibleTrigger>
               <CollapsibleContent className="mt-2 space-y-2">
@@ -224,6 +224,13 @@ function DetailsForm({ contact }: { contact: Contact }) {
     Object.entries(contact.custom_fields ?? {}).map(([k, v]) => [k, typeof v === "string" ? v : JSON.stringify(v)]),
   );
   const [saving, setSaving] = useState(false);
+  const dirty =
+    fullName !== (contact.full_name ?? "") ||
+    email !== (contact.email ?? "") ||
+    phone !== contact.phone ||
+    stage !== contact.stage ||
+    JSON.stringify(fields) !==
+      JSON.stringify(Object.entries(contact.custom_fields ?? {}).map(([k, v]) => [k, typeof v === "string" ? v : JSON.stringify(v)]));
 
   async function save() {
     setSaving(true);
@@ -239,10 +246,10 @@ function DetailsForm({ contact }: { contact: Contact }) {
 
   return (
     <div className="space-y-4 py-2">
-      <Field label="Full name"><Input value={fullName} onChange={(e) => setFullName(e.target.value)} /></Field>
-      <Field label="Email"><Input type="email" value={email} onChange={(e) => setEmail(e.target.value)} /></Field>
-      <Field label="Phone"><Input value={phone} onChange={(e) => setPhone(e.target.value)} /></Field>
-      <div className="rounded-lg bg-muted px-3 py-2 text-xs text-muted-foreground">
+      <Field label="Full name">{(p) => <Input {...p} autoComplete="off" value={fullName} onChange={(e) => setFullName(e.target.value)} />}</Field>
+      <Field label="Email">{(p) => <Input {...p} type="email" autoComplete="off" value={email} onChange={(e) => setEmail(e.target.value)} />}</Field>
+      <Field label="Phone">{(p) => <Input {...p} inputMode="tel" autoComplete="off" value={phone} onChange={(e) => setPhone(e.target.value)} />}</Field>
+      <div className={cn("rounded-lg px-3 py-2 text-xs", contact.consent_at ? "bg-muted text-muted-foreground" : "border border-danger-ink/30 text-danger-ink")}>
         {contact.consent_at ? (
           <>Call consent recorded {format(new Date(contact.consent_at), "MMM d, yyyy h:mm a")}
             {contact.consent_source && <> ({contact.consent_source})</>}.</>
@@ -251,38 +258,34 @@ function DetailsForm({ contact }: { contact: Contact }) {
         )}
       </div>
       <Field label="Stage">
-        <Select value={stage} onValueChange={(v) => setStage(v as PipelineStage)}>
-          <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
-          <SelectContent>
-            {STAGES.map((s) => <SelectItem key={s} value={s}>{STAGE_LABELS[s]}</SelectItem>)}
-          </SelectContent>
-        </Select>
+        {(p) => (
+          <Select value={stage} onValueChange={(v) => setStage(v as PipelineStage)}>
+            <SelectTrigger className="w-full" {...p}><SelectValue /></SelectTrigger>
+            <SelectContent>
+              {STAGES.map((s) => <SelectItem key={s} value={s}>{STAGE_LABELS[s]}</SelectItem>)}
+            </SelectContent>
+          </Select>
+        )}
       </Field>
       <div className="space-y-2">
-        <Label>Custom fields</Label>
+        <p className="text-sm font-semibold leading-none">Custom fields</p>
         {fields.map(([k, v], i) => (
           <div key={i} className="flex gap-2">
-            <Input placeholder="key" value={k} onChange={(e) => setFields(fields.map((f, j) => (j === i ? [e.target.value, f[1]] : f)))} />
-            <Input placeholder="value" value={v} onChange={(e) => setFields(fields.map((f, j) => (j === i ? [f[0], e.target.value] : f)))} />
-            <Button variant="ghost" size="icon" aria-label="Remove field" onClick={() => setFields(fields.filter((_, j) => j !== i))}>
-              <Trash2 className="h-4 w-4" />
+            <Input placeholder="key" aria-label={`Custom field ${i + 1} name`} value={k} onChange={(e) => setFields(fields.map((f, j) => (j === i ? [e.target.value, f[1]] : f)))} />
+            <Input placeholder="value" aria-label={`Custom field ${i + 1} value`} value={v} onChange={(e) => setFields(fields.map((f, j) => (j === i ? [f[0], e.target.value] : f)))} />
+            <Button variant="ghost" size="icon" aria-label={`Remove custom field ${i + 1}`} onClick={() => setFields(fields.filter((_, j) => j !== i))}>
+              <Trash2 strokeWidth={1.75} />
             </Button>
           </div>
         ))}
         <Button variant="outline" size="sm" onClick={() => setFields([...fields, ["", ""]])}>
-          <Plus className="h-4 w-4" /> Add field
+          <Plus strokeWidth={1.75} /> Add field
         </Button>
       </div>
-      <Button onClick={save} disabled={saving} className="w-full">{saving ? "Saving…" : "Save changes"}</Button>
+      <Button onClick={save} disabled={saving || !dirty} className="w-full">
+        {saving ? "Saving…" : dirty ? "Save changes" : "No changes to save"}
+      </Button>
     </div>
   );
 }
 
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <div className="space-y-2">
-      <Label>{label}</Label>
-      {children}
-    </div>
-  );
-}

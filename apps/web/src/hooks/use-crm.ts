@@ -13,6 +13,8 @@ export function useCrm() {
   const [latestCalls, setLatestCalls] = useState<Map<string, LatestCall>>(new Map());
   const [bookedCount, setBookedCount] = useState(0);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [attempt, setAttempt] = useState(0);
   const [recentlyMoved, setRecentlyMoved] = useState<Set<string>>(new Set());
   const [callLogVersion, setCallLogVersion] = useState(0);
   const moveTimers = useRef(new Map<string, ReturnType<typeof setTimeout>>());
@@ -38,23 +40,41 @@ export function useCrm() {
     setBookedCount(count ?? 0);
   }, []);
 
+  // Initial load. A failure shows an error with a retry instead of an empty, misleading board.
   useEffect(() => {
     const db = supabase();
     let cancelled = false;
-
+    setLoading(true);
+    setLoadError(null);
     (async () => {
-      const [{ data: contactRows }, { data: callRows }] = await Promise.all([
+      const [contactRes, callRes] = await Promise.all([
         db.from("contacts").select("*").order("updated_at", { ascending: false }),
         db.from("call_logs").select("id, contact_id, sentiment, outcome, created_at").order("created_at", { ascending: false }).limit(1000),
       ]);
       if (cancelled) return;
-      setContacts(new Map((contactRows ?? []).map((c: Contact) => [c.id, c])));
+      const error = contactRes.error ?? callRes.error;
+      if (error) {
+        setLoadError(error.message);
+        setLoading(false);
+        return;
+      }
+      setContacts(new Map((contactRes.data ?? []).map((c: Contact) => [c.id, c])));
       const latest = new Map<string, LatestCall>();
-      for (const row of (callRows ?? []) as LatestCall[]) if (!latest.has(row.contact_id)) latest.set(row.contact_id, row);
+      for (const row of (callRes.data ?? []) as LatestCall[]) if (!latest.has(row.contact_id)) latest.set(row.contact_id, row);
       setLatestCalls(latest);
       await refreshBooked();
       setLoading(false);
     })();
+    return () => {
+      cancelled = true;
+    };
+  }, [attempt, refreshBooked]);
+
+  const retry = useCallback(() => setAttempt((a) => a + 1), []);
+
+  useEffect(() => {
+    const db = supabase();
+    let cancelled = false;
 
     // Realtime must join with the user's access token, not the anon key: RLS only shows rows to
     // admins, so an anonymous subscription silently receives nothing. On a page reload the session
@@ -134,5 +154,5 @@ export function useCrm() {
 
   const sentimentFor = useCallback((id: string): Sentiment | null => latestCalls.get(id)?.sentiment ?? null, [latestCalls]);
 
-  return { contacts: list, contactById: contacts, loading, kpis, moveContact, sentimentFor, recentlyMoved, callLogVersion };
+  return { contacts: list, contactById: contacts, loading, loadError, retry, kpis, moveContact, sentimentFor, recentlyMoved, callLogVersion };
 }

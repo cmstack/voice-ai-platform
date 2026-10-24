@@ -40,7 +40,7 @@ export function TopNav({ children }: { children?: React.ReactNode }) {
               href={l.href}
               aria-current={active ? "page" : undefined}
               className={cn(
-                "relative flex items-center whitespace-nowrap px-2 text-sm text-muted-foreground sm:px-3 outline-none transition-colors hover:text-foreground focus-visible:text-foreground",
+                "relative flex items-center whitespace-nowrap px-2 text-sm text-muted-foreground sm:px-3 outline-none transition-colors hover:text-foreground focus-visible:text-foreground focus-visible:ring-3 focus-visible:ring-inset focus-visible:ring-ring/40 rounded-md",
                 active && "font-semibold text-foreground after:absolute after:inset-x-2 after:bottom-0 sm:after:inset-x-3 after:h-0.5 after:rounded-full after:bg-foreground",
               )}
             >

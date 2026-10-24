@@ -36,8 +36,8 @@ export function NewLeadDialog() {
           consent_source: consent ? "confirmed by operator in dashboard" : null,
         }),
       });
-      const body = await res.json();
-      if (!res.ok) throw new Error(typeof body.detail === "string" ? body.detail : JSON.stringify(body.detail));
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(errorMessage(body.detail, res.status));
       if (body.blocked_reason) {
         const when = body.next_attempt_at ? ` Next attempt: ${new Date(body.next_attempt_at).toLocaleString()}.` : "";
         toast.warning(`Lead created but not dialed: ${body.blocked_reason}.${when}`);
@@ -75,11 +75,11 @@ export function NewLeadDialog() {
           </div>
           <div className="space-y-2">
             <Label htmlFor="lead-name">Full name</Label>
-            <Input id="lead-name" value={fullName} onChange={(e) => setFullName(e.target.value)} />
+            <Input id="lead-name" autoComplete="off" value={fullName} onChange={(e) => setFullName(e.target.value)} />
           </div>
           <div className="space-y-2">
             <Label htmlFor="lead-email">Email</Label>
-            <Input id="lead-email" type="email" value={email} onChange={(e) => setEmail(e.target.value)} />
+            <Input id="lead-email" type="email" autoComplete="off" value={email} onChange={(e) => setEmail(e.target.value)} />
           </div>
           <div className="space-y-2">
             <Label htmlFor="lead-interest">Interest</Label>
@@ -87,10 +87,10 @@ export function NewLeadDialog() {
           </div>
           <label className="flex items-center justify-between gap-4 rounded-lg border border-border p-3 text-sm">
             <span className="flex flex-col gap-0.5">
-              <span className="font-semibold">Call immediately</span>
-              <span className="text-xs text-muted-foreground">The agent dials within seconds (speed-to-lead).</span>
+              <span className="font-semibold" id="lead-dial-label">Call immediately</span>
+              <span className="text-xs text-muted-foreground" id="lead-dial-help">The agent dials within seconds (speed-to-lead).</span>
             </span>
-            <Switch checked={dial} onCheckedChange={setDial} />
+            <Switch checked={dial} onCheckedChange={setDial} aria-labelledby="lead-dial-label" aria-describedby="lead-dial-help" />
           </label>
           <label className="flex items-start gap-3 text-sm">
             <input
@@ -114,4 +114,17 @@ export function NewLeadDialog() {
       </DialogContent>
     </Dialog>
   );
+}
+
+/** Turns a FastAPI error body (a string, or a list of validation errors) into one readable sentence. */
+function errorMessage(detail: unknown, status: number): string {
+  if (typeof detail === "string") return detail;
+  if (Array.isArray(detail) && detail.length > 0) {
+    const first = detail[0] as { loc?: unknown[]; msg?: string };
+    const field = first.loc?.at(-1);
+    const msg = (first.msg ?? "Check the form and try again.").replace(/^Value error, /, "");
+    return field ? `${String(field).replaceAll("_", " ")}: ${msg}` : msg;
+  }
+  if (status === 429) return "Too many requests. Wait a minute and try again.";
+  return `The voice engine returned an error (${status}). Try again.`;
 }

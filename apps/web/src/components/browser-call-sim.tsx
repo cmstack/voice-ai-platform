@@ -35,10 +35,16 @@ export function BrowserCallSim({ contacts }: { contacts: Contact[] }) {
   const clientRef = useRef<PipecatClient | null>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
   const botLineId = useRef<string | null>(null);
+  const transcriptEnd = useRef<HTMLDivElement>(null);
 
   const live = state !== "idle" && state !== "disconnected" && state !== "error";
 
   useEffect(() => () => void clientRef.current?.disconnect(), []);
+
+  // Keep the newest line in view as the conversation grows.
+  useEffect(() => {
+    transcriptEnd.current?.scrollIntoView({ block: "end", behavior: "smooth" });
+  }, [lines]);
 
   // Call timer while the agent is live.
   useEffect(() => {
@@ -113,7 +119,10 @@ export function BrowserCallSim({ contacts }: { contacts: Contact[] }) {
         onDeviceError: (err) => {
           if (err.type === "permissions" || err.type === "not-found" || err.type === "in-use") setMicBlocked(true);
         },
-        onError: (msg) => toast.error(`Voice engine error: ${JSON.stringify(msg.data ?? msg)}`),
+        onError: (msg) => {
+          const data = msg.data as { message?: string; error?: string } | undefined;
+          toast.error(`Voice engine error: ${data?.message ?? data?.error ?? "the call failed. Check the voice engine logs."}`);
+        },
         onDisconnected: () => setState("disconnected"),
       },
     });
@@ -151,12 +160,12 @@ export function BrowserCallSim({ contacts }: { contacts: Contact[] }) {
         </DialogHeader>
 
         <div className="flex flex-wrap items-end gap-3">
-          <div role="radiogroup" aria-label="Call type" className="flex rounded-lg bg-muted p-1">
+          <div role="group" aria-label="Call type" className="flex rounded-lg bg-muted p-1">
             {(["inbound", "outbound"] as const).map((d) => (
               <button
                 key={d}
-                role="radio"
-                aria-checked={direction === d}
+                type="button"
+                aria-pressed={direction === d}
                 disabled={live}
                 onClick={() => setDirection(d)}
                 className={cn(
@@ -230,6 +239,7 @@ export function BrowserCallSim({ contacts }: { contacts: Contact[] }) {
                     </p>
                   </div>
                 ))}
+                <div ref={transcriptEnd} />
               </div>
             )}
           </ScrollArea>
