@@ -10,7 +10,7 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 # Values that are published in docs or committed in this repo. Never acceptable outside local dev.
 SUPABASE_LOCAL_JWT_SECRET = "super-secret-jwt-token-with-at-least-32-characters-long"
 PLACEHOLDER_SECRETS = {"", "change-me", "changeme", "secret", "..."}
-LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1", "0.0.0.0", "host.docker.internal"}
+LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1", "0.0.0.0", "host.docker.internal"}  # nosec B104: hosts we treat as local, not a bind address
 
 
 def _is_local(url: str) -> bool:

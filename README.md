@@ -1,5 +1,13 @@
 # Voice Agent CRM
 
+> [!WARNING]
+> **This project is for demo purposes ONLY.** It is a learning and demonstration build, not a
+> production product. It has not been tested against live phone traffic, audited for regulatory
+> compliance (TCPA, GDPR, call-recording consent laws and similar), or hardened for real customer
+> data. Don't use it to call real people or store real personal data. The seeded admin login in
+> `supabase/seed.sql` is a local-only demo credential. You're responsible for anything you deploy
+> from this code.
+
 A self-hosted AI voice agent that answers inbound calls, places speed-to-lead outbound calls, books
 appointments on Cal.com mid-call, and moves leads across a realtime Kanban CRM.
 

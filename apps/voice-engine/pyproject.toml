@@ -32,3 +32,9 @@ asyncio_default_fixture_loop_scope = "session"
 asyncio_default_test_loop_scope = "session"
 pythonpath = ["."]
 testpaths = ["tests"]
+
+[tool.uv]
+# pipecat-ai 1.12 caps Pillow below 13, but Pillow 12.x has known CVEs fixed in 13.0.0. The voice
+# path never processes images (Pillow is only used for video frames), so lift the cap until we move
+# to pipecat-ai >= 1.14, which allows Pillow 13.
+override-dependencies = ["pillow>=13.0.0"]
