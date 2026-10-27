@@ -239,7 +239,8 @@ books meetings mid-call.
    is wrong; an empty `data` object means the event type has no availability in that window. On
    Linux, use `$(date -d '+7 days' +%F)` for the end date.
 7. **Test it end to end.** Open **Test Agent in Browser**, say you'd like to book, pick a day, accept
-   a time, and give your name and email. The tool log shows `check_calendar_availability` and
+   a time, and give your name and a real email address you can receive. Cal.com checks that the
+   domain accepts mail, so made-up addresses like `abc@123.com` are refused. The tool log shows `check_calendar_availability` and
    `book_calendar_appointment`, the card moves to **Appointment Booked**, and the booking appears in
    Cal.com with an email invite.
 

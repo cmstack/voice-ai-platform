@@ -156,3 +156,16 @@ async def test_booking_timeout_becomes_calendar_error(rt):
     respx.post(f"{CAL}/bookings").mock(side_effect=httpx.ReadTimeout("slow"))
     out = await tools.book_calendar_appointment(rt, slot, "Jane Doe", "jane@example.com")
     assert out["success"] is False and "ReadTimeout" in rt.flow.tool_errors[0]["reason"]
+
+
+@respx.mock
+async def test_undeliverable_email_asks_for_another_and_keeps_the_slot(rt):
+    slot = future_slots(1)[0]["start"]
+    offer(rt, slot)
+    respx.post(f"{CAL}/bookings").mock(return_value=httpx.Response(400, json={
+        "statusCode": 400, "message": "email_domain_cannot_receive_mail", "status": "error",
+        "error": {"code": "HttpError", "message": "This email address cannot receive mail. Please use a valid email."}}))
+    out = await tools.book_calendar_appointment(rt, slot, "Charles", "abc@123.com")
+    assert out["success"] is False
+    assert "can't receive email" in out["error"] and "same slot_iso" in out["error"]
+    assert "no longer free" not in out["error"]

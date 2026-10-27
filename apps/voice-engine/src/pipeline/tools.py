@@ -163,6 +163,13 @@ async def book_calendar_appointment(
     except calendar.CalendarError as exc:
         logger.warning(f"Booking failed: {exc}")
         rt.flow.record_error("book_calendar_appointment", str(exc))
+        if exc.bad_email:
+            return {
+                "success": False,
+                "error": f"The calendar can't send an invite to {attendee_email}: that address can't receive email. The "
+                         "time is still free. Ask the caller for an email address that works, spell it back, then call "
+                         "book_calendar_appointment again with the same slot_iso.",
+            }
         if exc.slot_unavailable:
             return {"success": False, "error": "Cal.com says that time is no longer free. Offer another of the slots."}
         return {

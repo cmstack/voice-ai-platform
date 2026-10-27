@@ -13,12 +13,15 @@ BOOKINGS_API_VERSION = "2024-08-13"
 
 
 class CalendarError(RuntimeError):
-    def __init__(self, message: str, *, slot_unavailable: bool = False):
+    def __init__(self, message: str, *, slot_unavailable: bool = False, bad_email: bool = False):
         super().__init__(message)
         self.slot_unavailable = slot_unavailable
+        self.bad_email = bad_email
 
 
 # Cal.com error text that means the time itself can't be booked (vs. a config or system problem).
+# Cal.com rejects attendee emails whose domain can't receive mail (it checks the domain's mail servers).
+_BAD_EMAIL = ("email_domain_cannot_receive_mail", "cannot receive mail", "invalid email")
 _SLOT_GONE = ("no_available_users_found", "not available", "already has booking", "booking limit", "past")
 
 
@@ -117,6 +120,7 @@ async def create_booking(
         raise CalendarError(
             f"Cal.com booking {resp.status_code}: {text}",
             slot_unavailable=any(marker in text.lower() for marker in _SLOT_GONE),
+            bad_email=any(marker in text.lower() for marker in _BAD_EMAIL),
         )
     data = resp.json()["data"]
     return Booking(uid=data["uid"], start=_parse_iso(data.get("start", payload["start"])))
