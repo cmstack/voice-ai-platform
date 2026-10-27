@@ -30,3 +30,13 @@ async def test_nova_sonic_pipeline_builds(monkeypatch):
     agg = LLMContextAggregatorPair(LLMContext())
     worker = PipelineWorker(Pipeline([agg.user(), llm, agg.assistant()]), enable_rtvi=True)
     assert worker is not None
+
+
+def test_local_vad_observes_turns_without_interrupting_nova():
+    from pipecat.turns.user_stop.turn_analyzer_user_turn_stop_strategy import TurnAnalyzerUserTurnStopStrategy
+
+    from src.pipeline.voice_pipeline import user_aggregator_params
+
+    strategies = user_aggregator_params().user_turn_strategies
+    assert strategies.start and all(not s._enable_interruptions for s in strategies.start)
+    assert not any(isinstance(s, TurnAnalyzerUserTurnStopStrategy) for s in strategies.stop)

@@ -87,7 +87,8 @@ async def test_placeholder_webhook_secret_never_authenticates(monkeypatch):
 
 @pytest.fixture
 async def config():
-    return await db.get_agent_config()
+    # Pinned, so the expected times don't depend on what the operator set in Agent Studio.
+    return {**await db.get_agent_config(), "timezone": "America/Chicago", "business_hours_start": 9, "business_hours_end": 19}
 
 
 async def consented(phone=PHONE):

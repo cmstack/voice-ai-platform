@@ -178,7 +178,7 @@ transport.input() → user_aggregator → AWSNovaSonicLLMService(tools, voice, s
   → transport.output() → assistant_aggregator
 ```
 * `LLMContextAggregatorPair` (realtime mode auto-detected). Transcript lines are captured from `on_user_turn_message_added` / `on_assistant_turn_stopped` with timestamps.
-* Turn-taking and barge-in are native to Nova Sonic. Its ~8 min session limit is handled by Pipecat's built-in session continuation.
+* Turn-taking and barge-in are native to Nova Sonic. Local Silero VAD only *observes* turns (outbound "Hello?" detection, RTVI events): its start strategy has `enable_interruptions=False` and the stop strategy is a speech timeout, not the smart-turn model (`user_aggregator_params()`). Local interruptions would flush queued agent audio and cancel in-flight tool calls that Nova still awaits. Its ~8 min session limit is handled by Pipecat's built-in session continuation.
 * **First turn.** Nova 2.5 Sonic speaks when the context ends in a user message and an `LLMRunFrame` is queued.
   * Inbound / WebRTC-inbound: on client connect, queue `LLMRunFrame` with a seed user message telling the agent to deliver the compiled `inbound_greeting`. Any upcoming confirmed appointment is noted in the system instruction ("Caller already has a confirmed booking on {scheduled_at}…").
   * Outbound: the agent waits for the callee to speak ("Hello?"). If no user turn starts within **1200 ms** of connect, queue the greeting run anyway.

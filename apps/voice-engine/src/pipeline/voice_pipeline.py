@@ -26,6 +26,9 @@ from pipecat.processors.aggregators.llm_response_universal import (
 )
 from pipecat.services.aws.nova_sonic.llm import AWSNovaSonicLLMService
 from pipecat.transports.base_transport import BaseTransport
+from pipecat.turns.user_start.vad_user_turn_start_strategy import VADUserTurnStartStrategy
+from pipecat.turns.user_stop.speech_timeout_user_turn_stop_strategy import SpeechTimeoutUserTurnStopStrategy
+from pipecat.turns.user_turn_strategies import UserTurnStrategies
 
 from src import db
 from src.config import get_settings
@@ -35,6 +38,23 @@ from src.schemas import CallContext
 from src.services import aws
 
 OUTBOUND_SILENCE_TIMEOUT_SECS = 1.2
+
+
+def user_aggregator_params() -> LLMUserAggregatorParams:
+    """Local VAD only *observes* turns (outbound "Hello?" detection, RTVI events).
+
+    Nova Sonic does its own turn-taking and barge-in. If local VAD also raised interruptions, every
+    noise or speaker echo would flush the agent's queued audio (choppy speech) and cancel in-flight
+    tool calls, leaving Nova waiting on a result that never comes. The speech-timeout stop strategy
+    also avoids running the local smart-turn model on every turn.
+    """
+    return LLMUserAggregatorParams(
+        vad_analyzer=SileroVADAnalyzer(params=VADParams(start_secs=0.2, stop_secs=0.4)),
+        user_turn_strategies=UserTurnStrategies(
+            start=[VADUserTurnStartStrategy(enable_interruptions=False)],
+            stop=[SpeechTimeoutUserTurnStopStrategy(user_speech_timeout=0.4, wait_for_transcript=False)],
+        ),
+    )
 
 
 def build_llm(system_instruction: str, voice: str, rt: ToolRuntime) -> AWSNovaSonicLLMService:
@@ -84,12 +104,7 @@ class VoiceSession:
         )
         llm = build_llm(system_instruction, config["nova_voice_id"], self.rt)
         self.context = LLMContext()
-        aggregators = LLMContextAggregatorPair(
-            self.context,
-            user_params=LLMUserAggregatorParams(
-                vad_analyzer=SileroVADAnalyzer(params=VADParams(start_secs=0.2, stop_secs=0.4))
-            ),
-        )
+        aggregators = LLMContextAggregatorPair(self.context, user_params=user_aggregator_params())
         pipeline = Pipeline([
             self.transport.input(),
             aggregators.user(),
