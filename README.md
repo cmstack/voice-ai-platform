@@ -197,15 +197,27 @@ Without Cal.com the agent still talks and qualifies, but every calendar lookup s
 unavailable" and it offers a callback instead. With it, the agent reads your real availability and
 books meetings mid-call.
 
-1. **Create the event type the agent will book.** In Cal.com, open **Event Types** and create (or
-   pick) the meeting, for example a 15-minute intro call. Keep its booking questions to the
+> **Cal.com renamed "Event Types" to "Links"** in October 2026. In the sidebar, use **Links**, not
+> **Events**: Events is a separate feature for one-off workshops and meetups that people RSVP to,
+> and the agent can't book those. The API still calls Links "event types", which is why the
+> settings below say *event type ID*.
+
+1. **Create the Link the agent will book.** In Cal.com, open **Links** in the sidebar and create
+   (or pick) the meeting, for example a 15-minute intro call. Keep its booking questions to the
    defaults (name, email, notes): the agent only collects those, so an extra *required* question
    makes every booking fail. Turn **Requires confirmation** off if you want bookings confirmed
    instantly.
-2. **Find its event type ID.** Open the event type; the number at the end of the page address
-   (`…/event-types/123456`) is its ID.
-3. **Create an API key.** In Cal.com, go to **Settings → Developer → API Keys**, create a key, and
-   copy it (it starts with `cal_live_`). Treat it like a password.
+2. **Find its event type ID.** Open the Link; the number at the end of the page address
+   (for example `…/links/123456` or `…/event-types/123456`) is its ID. If the address has no
+   number, list your Links with the API key from step 3 and copy the `id` of the one you want:
+
+   ```bash
+   curl -s "https://api.cal.com/v2/event-types" -H "Authorization: Bearer $CAL_API_KEY" -H "cal-api-version: 2024-06-14"
+   ```
+3. **Create an API key.** In Cal.com, open **Settings** (bottom of the sidebar) → **Developer** →
+   **API Keys**, or go straight to `app.cal.com/settings/developer/api-keys`. Create a key, choose
+   **Never expires** (an expired key silently turns calendar lookups off), and copy it. It starts
+   with `cal_live_` and is shown only once. Treat it like a password.
 4. **Add the key to `.env`** and restart the voice engine:
 
    ```ini
