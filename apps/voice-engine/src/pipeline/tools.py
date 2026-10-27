@@ -10,6 +10,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from loguru import logger
 from pipecat.adapters.schemas.function_schema import FunctionSchema
@@ -106,9 +107,11 @@ async def check_calendar_availability(rt: ToolRuntime, date_str: str, timezone: 
 
 def _offered(rt: ToolRuntime, slot_iso: str) -> datetime | None:
     try:
-        start = datetime.fromisoformat(slot_iso.replace("Z", "+00:00"))
+        start = datetime.fromisoformat(slot_iso.strip().replace("Z", "+00:00"))
     except ValueError:
         return None
+    if start.tzinfo is None:  # the model dropped the offset: read it in the agent's timezone
+        start = start.replace(tzinfo=ZoneInfo(rt.config["timezone"]))
     return start if any(start == s for s in rt.offered_slots.values()) else None
 
 
@@ -139,9 +142,13 @@ async def book_calendar_appointment(
         }
     start = _offered(rt, slot_iso)
     if start is None:
+        logger.warning(f"Booking refused: slot_iso {slot_iso!r} was not offered on this call")
+        rt.flow.record_error("book_calendar_appointment", f"slot_iso {slot_iso!r} was not one of the offered slots")
         return {
             "success": False,
-            "error": "Only book a slot_iso that check_calendar_availability returned on this call.",
+            "error": "That slot_iso doesn't match an offered slot. Call book_calendar_appointment again with one of "
+                     "these exact slot_iso values. Don't tell the caller the time was taken.",
+            "offered_slot_isos": list(rt.offered_slots),
         }
     try:
         booking = await calendar.create_booking(
@@ -155,7 +162,14 @@ async def book_calendar_appointment(
         )
     except calendar.CalendarError as exc:
         logger.warning(f"Booking failed: {exc}")
-        return {"success": False, "error": "That time could not be booked. Offer the caller a different slot."}
+        rt.flow.record_error("book_calendar_appointment", str(exc))
+        if exc.slot_unavailable:
+            return {"success": False, "error": "Cal.com says that time is no longer free. Offer another of the slots."}
+        return {
+            "success": False,
+            "error": "The calendar couldn't complete the booking because of a system problem, not because the time "
+                     "is taken. Apologise, don't retry, and offer to schedule a callback instead.",
+        }
 
     await db.record_booking(
         contact_id=rt.call.contact_id,

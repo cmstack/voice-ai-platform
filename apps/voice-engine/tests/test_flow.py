@@ -121,7 +121,7 @@ async def test_unoffered_slot_cannot_be_booked(rt):
     await call(rt, "check_calendar_availability")(date_str=(datetime.now() + timedelta(days=2)).date().isoformat())
     out = await call(rt, "book_calendar_appointment")(slot_iso="2099-05-05T09:00:00+00:00",
                                                      attendee_name="Dana", attendee_email="d@example.com")
-    assert out["success"] is False and "returned on this call" in out["error"] and not rt.booked
+    assert out["success"] is False and "offered_slot_isos" in out and not rt.booked
 
 
 async def test_callback_requires_future_offset_time(rt):

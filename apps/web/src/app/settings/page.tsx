@@ -15,7 +15,15 @@ import { Textarea } from "@/components/ui/textarea";
 import { supabase } from "@/lib/supabase";
 import { NOVA_VOICES, type AgentConfig } from "@/lib/types";
 
-const TIMEZONES = ["America/New_York", "America/Chicago", "America/Denver", "America/Phoenix", "America/Los_Angeles", "Europe/London", "UTC"];
+const COMMON_TIMEZONES = ["America/New_York", "America/Chicago", "America/Denver", "America/Phoenix", "America/Los_Angeles", "Europe/London", "UTC"];
+// Every IANA zone the browser knows, so the agent's zone can match the Cal.com schedule's zone.
+const TIMEZONES: string[] = (() => {
+  try {
+    return [...new Set([...COMMON_TIMEZONES, ...Intl.supportedValuesOf("timeZone")])];
+  } catch {
+    return COMMON_TIMEZONES;
+  }
+})();
 
 type Draft = Omit<AgentConfig, "objection_handlers" | "id" | "updated_at"> & { objection_handlers: [string, string][] };
 
@@ -226,7 +234,7 @@ export default function SettingsPage() {
                 <Input {...p} placeholder="+17135550100" value={draft.human_transfer_phone ?? ""} onChange={(e) => set("human_transfer_phone", e.target.value)} />
               )}
             </Field>
-            <Field label="Timezone">
+            <Field label="Timezone" hint="Use the same timezone as your Cal.com availability, or offered times will look shifted.">
               {(p) => (
                 <Select value={draft.timezone} onValueChange={(v) => set("timezone", v)}>
                   <SelectTrigger className="w-full" {...p}><SelectValue /></SelectTrigger>

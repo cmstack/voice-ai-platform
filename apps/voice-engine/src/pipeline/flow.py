@@ -69,6 +69,7 @@ class FlowState:
     callback_reason: str | None = None
     end_reason: str | None = None
     slots_offered: bool = False
+    tool_errors: list[dict[str, str]] = field(default_factory=list)
 
     def __post_init__(self):
         if not self.path:
@@ -86,6 +87,10 @@ class FlowState:
             "error": f"{tool} is not available in the {self.stage.value} step.",
             **self.step(),
         }
+
+    def record_error(self, tool: str, reason: str) -> None:
+        """Keeps why a tool failed with the call, so a failed booking can be diagnosed after the fact."""
+        self.tool_errors.append({"tool": tool, "reason": reason[:300], "at": _now()})
 
     def enter(self, stage: Stage) -> None:
         if stage != self.stage:
@@ -147,6 +152,7 @@ class FlowState:
             "answers": self.answers,
             "callback_at": self.callback_at.isoformat() if self.callback_at else None,
             "end_reason": self.end_reason,
+            "tool_errors": self.tool_errors,
         }
 
 

@@ -106,3 +106,53 @@ def test_tool_schemas_registered(rt):
     names = [t.name for t in tools.build_tools(rt)]
     assert names == ["save_qualification", "check_calendar_availability", "book_calendar_appointment",
                      "schedule_callback", "transfer_to_human", "end_call"]
+
+
+# --- booking failures must be diagnosable and described honestly to the model ----------------
+
+
+async def test_slot_without_offset_is_read_in_agent_timezone(rt):
+    from zoneinfo import ZoneInfo
+    local = (datetime.now(ZoneInfo(rt.config["timezone"])) + timedelta(days=2)).replace(hour=10, minute=0, second=0, microsecond=0)
+    offer(rt, local.isoformat())
+    assert tools._offered(rt, local.replace(tzinfo=None).isoformat()) == local
+
+
+async def test_unoffered_slot_lists_valid_choices_and_is_recorded(rt):
+    slot = future_slots(1)[0]["start"]
+    offer(rt, slot)
+    out = await tools.book_calendar_appointment(rt, "2031-01-01T09:00:00Z", "Jane Doe", "jane@example.com")
+    assert out["success"] is False
+    assert out["offered_slot_isos"] == [slot]
+    assert "taken" in out["error"]  # tells the model not to claim the slot was taken
+    assert rt.flow.summary()["tool_errors"][0]["tool"] == "book_calendar_appointment"
+
+
+@respx.mock
+async def test_system_booking_error_is_not_described_as_taken(rt):
+    slot = future_slots(1)[0]["start"]
+    offer(rt, slot)
+    respx.post(f"{CAL}/bookings").mock(return_value=httpx.Response(
+        400, json={"status": "error", "error": {"message": "Google Calendar credentials are invalid"}}))
+    out = await tools.book_calendar_appointment(rt, slot, "Jane Doe", "jane@example.com")
+    assert out["success"] is False and "not because the time is taken" in out["error"]
+    assert "Google Calendar credentials" in rt.flow.tool_errors[0]["reason"]
+
+
+@respx.mock
+async def test_unavailable_slot_error_offers_another(rt):
+    slot = future_slots(1)[0]["start"]
+    offer(rt, slot)
+    respx.post(f"{CAL}/bookings").mock(return_value=httpx.Response(
+        400, json={"status": "error", "error": {"message": "no_available_users_found_error"}}))
+    out = await tools.book_calendar_appointment(rt, slot, "Jane Doe", "jane@example.com")
+    assert "no longer free" in out["error"]
+
+
+@respx.mock
+async def test_booking_timeout_becomes_calendar_error(rt):
+    slot = future_slots(1)[0]["start"]
+    offer(rt, slot)
+    respx.post(f"{CAL}/bookings").mock(side_effect=httpx.ReadTimeout("slow"))
+    out = await tools.book_calendar_appointment(rt, slot, "Jane Doe", "jane@example.com")
+    assert out["success"] is False and "ReadTimeout" in rt.flow.tool_errors[0]["reason"]

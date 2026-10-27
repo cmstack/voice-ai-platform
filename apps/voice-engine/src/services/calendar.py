@@ -13,7 +13,13 @@ BOOKINGS_API_VERSION = "2024-08-13"
 
 
 class CalendarError(RuntimeError):
-    pass
+    def __init__(self, message: str, *, slot_unavailable: bool = False):
+        super().__init__(message)
+        self.slot_unavailable = slot_unavailable
+
+
+# Cal.com error text that means the time itself can't be booked (vs. a config or system problem).
+_SLOT_GONE = ("no_available_users_found", "not available", "already has booking", "booking limit", "past")
 
 
 @dataclass
@@ -31,12 +37,12 @@ class Booking:
     start: datetime
 
 
-def _client() -> httpx.AsyncClient:
+def _client(timeout: float = 8.0) -> httpx.AsyncClient:
     s = get_settings()
     return httpx.AsyncClient(
         base_url=s.cal_api_base_url,
         headers={"Authorization": f"Bearer {s.cal_api_key}"},
-        timeout=httpx.Timeout(8.0),
+        timeout=httpx.Timeout(timeout),
     )
 
 
@@ -47,17 +53,20 @@ def _parse_iso(value: str) -> datetime:
 async def available_slots(
     event_type_id: int, day: date, timezone: str, days_ahead: int = 0
 ) -> list[Slot]:
-    async with _client() as client:
-        resp = await client.get(
-            "/slots",
-            params={
-                "eventTypeId": event_type_id,
-                "start": day.isoformat(),
-                "end": (day + timedelta(days=days_ahead)).isoformat(),
-                "timeZone": timezone,
-            },
-            headers={"cal-api-version": SLOTS_API_VERSION},
-        )
+    try:
+        async with _client() as client:
+            resp = await client.get(
+                "/slots",
+                params={
+                    "eventTypeId": event_type_id,
+                    "start": day.isoformat(),
+                    "end": (day + timedelta(days=days_ahead)).isoformat(),
+                    "timeZone": timezone,
+                },
+                headers={"cal-api-version": SLOTS_API_VERSION},
+            )
+    except httpx.HTTPError as exc:
+        raise CalendarError(f"Cal.com slots request failed: {type(exc).__name__}: {exc}") from exc
     if resp.status_code != 200:
         raise CalendarError(f"Cal.com slots {resp.status_code}: {resp.text[:200]}")
     data = resp.json().get("data", {})
@@ -95,11 +104,19 @@ async def create_booking(
     }
     if notes:
         payload["bookingFieldsResponses"] = {"notes": notes}
-    async with _client() as client:
-        resp = await client.post(
-            "/bookings", json=payload, headers={"cal-api-version": BOOKINGS_API_VERSION}
-        )
+    # Creating the booking also creates the calendar event and video link, which can take a while.
+    try:
+        async with _client(timeout=20.0) as client:
+            resp = await client.post(
+                "/bookings", json=payload, headers={"cal-api-version": BOOKINGS_API_VERSION}
+            )
+    except httpx.HTTPError as exc:
+        raise CalendarError(f"Cal.com booking request failed: {type(exc).__name__}: {exc}") from exc
     if resp.status_code != 201:
-        raise CalendarError(f"Cal.com booking {resp.status_code}: {resp.text[:300]}")
+        text = resp.text[:300]
+        raise CalendarError(
+            f"Cal.com booking {resp.status_code}: {text}",
+            slot_unavailable=any(marker in text.lower() for marker in _SLOT_GONE),
+        )
     data = resp.json()["data"]
     return Booking(uid=data["uid"], start=_parse_iso(data.get("start", payload["start"])))
